@@ -21,6 +21,17 @@ app.use(cors());
 app.use(express.json());
 
 // ============================================
+// HEALTH CHECK (for cron job keep-alive)
+// ============================================
+app.get('/', (req, res) => {
+  res.json({ status: 'ok', message: 'AI Interview Coach API is running', timestamp: new Date().toISOString() });
+});
+
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', uptime: process.uptime() });
+});
+
+// ============================================
 // AUTH ROUTES
 // ============================================
 
