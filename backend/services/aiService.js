@@ -3,7 +3,7 @@ require('dotenv').config();
 // OpenRouter API configuration
 // Uses Xiaomi MiMo v2 Flash - a free model
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const MODEL = 'mistralai/devstral-2512:free'; // Free model
+const MODEL = 'xiaomi/mimo-v2-flash:free'; // Free model
 
 /**
  * Helper function to call OpenRouter API
