@@ -111,7 +111,7 @@ async function generateQuestions(resumeText, jobDescription = "") {
  */
 async function generateCodingChallenge(resumeText) {
   try {
-    const prompt = `Based on the candidate's resume below, identify their primary programming language (e.g., JavaScript, Python, Java).
+    const prompt = `You are a strict technical interviewer. Based on the candidate's resume below, identify their primary programming language.
 Then, generate a medium-difficulty coding challenge suitable for a live interview.
 
 RESUME TEXT:
@@ -124,7 +124,7 @@ Structure:
   "title": "Problem Title",
   "description": "Short description of the problem.",
   "problemStatement": "Detailed explanation of the problem, input/output format, and examples.",
-  "constraints": "List of constraints (e.g. time limit, input size).",
+  "constraints": "List of constraints (e.g. time limit, input size, memory usage). Must be a string.",
   "starterCode": "function solve(input) {\\n  // Your code here\\n}",
   "testCases": [
     { "input": "...", "expectedOutput": "..." },
@@ -134,7 +134,18 @@ Structure:
 
     const response = await callOpenRouter(prompt, 'Generate Coding Challenge');
     const cleanedText = cleanJsonResponse(response);
-    return JSON.parse(cleanedText);
+    const challenge = JSON.parse(cleanedText);
+
+    // Ensure defaults to prevent crashes
+    return {
+        language: challenge.language || 'javascript',
+        title: challenge.title || 'Coding Challenge',
+        description: challenge.description || 'No description provided.',
+        problemStatement: challenge.problemStatement || 'No problem statement provided.',
+        constraints: challenge.constraints || 'No specific constraints provided.',
+        starterCode: challenge.starterCode || '// Write your solution here',
+        testCases: Array.isArray(challenge.testCases) ? challenge.testCases : []
+    };
   } catch (error) {
     console.error('Error generating coding challenge:', error);
     throw new Error('Failed to generate coding challenge');

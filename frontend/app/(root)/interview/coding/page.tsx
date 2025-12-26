@@ -299,17 +299,19 @@ export default function CodingRoundPage() {
 
               <h3 className="font-semibold mt-4 mb-2">Constraints</h3>
               <ul className="list-disc pl-5 mb-4 text-muted-foreground">
-                {challenge.constraints.split('\n').map((c: string, i: number) => <li key={i}>{c}</li>)}
+                {(challenge.constraints || "No specific constraints provided.").split('\n').map((c: string, i: number) => <li key={i}>{c}</li>)}
               </ul>
 
               <h3 className="font-semibold mt-4 mb-2">Example Cases</h3>
               <div className="space-y-2">
-                  {challenge.testCases?.map((tc:any, i:number) => (
+                  {challenge.testCases && Array.isArray(challenge.testCases) ? challenge.testCases.map((tc:any, i:number) => (
                       <div key={i} className="bg-muted/50 p-2 rounded border border-border font-mono text-xs">
                           <span className="text-muted-foreground">In:</span> {tc.input} <br/>
                           <span className="text-muted-foreground">Out:</span> {tc.expectedOutput}
                       </div>
-                  ))}
+                  )) : (
+                      <p className="text-muted-foreground italic text-sm">No example cases provided.</p>
+                  )}
               </div>
           </div>
       </div>
