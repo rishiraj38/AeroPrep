@@ -9,8 +9,11 @@ const monaSanas = Mona_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "PrepAero",
+  title: "AeroPrep",
   description: "An AI powered platform for mock interviews",
+  icons: {
+    icon: '/ap.png',
+  },
 };
 
 export default function RootLayout({

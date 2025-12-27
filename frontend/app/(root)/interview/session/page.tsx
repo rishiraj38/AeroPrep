@@ -153,7 +153,11 @@ export default function InterviewSessionPage() {
              Question {currentIndex + 1} / {questions.length}
            </h2>
            {!isStarted && (
-             <Button onClick={startInterview} size="lg" className="animate-pulse cursor-pointer">
+             <Button 
+               onClick={startInterview} 
+               size="lg" 
+               className="shadow-[0_0_20px_rgba(59,130,246,0.6)] border border-primary-200 animate-[pulse_2s_cubic-bezier(0.4,0,0.6,1)_infinite] hover:animate-none hover:scale-105 transition-all cursor-pointer font-bold tracking-wide"
+             >
                Start Interview
              </Button>
            )}

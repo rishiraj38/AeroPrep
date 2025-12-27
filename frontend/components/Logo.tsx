@@ -13,7 +13,7 @@ export const Logo = ({ className, size = "md" }: { className?: string; size?: "s
   const pxSize = sizeClasses[size];
 
   return (
-    <div className={cn("relative flex items-center justify-center", className)}>
+    <div className={cn("relative flex items-center justify-center cursor-pointer", className)}>
       <Image 
         src="/ap.png" 
         alt="Aero Prep Logo" 

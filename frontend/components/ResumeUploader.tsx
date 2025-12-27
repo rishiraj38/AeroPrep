@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import { IKContext, IKUpload } from 'imagekitio-react';
 import { Loader2, CheckCircle, UploadCloud, AlertTriangle } from 'lucide-react';
 
-const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
+const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
 const urlEndpoint = process.env.NEXT_PUBLIC_IMAGEKIT_URL_ENDPOINT;
 const publicKey = process.env.NEXT_PUBLIC_IMAGEKIT_PUBLIC_KEY;
 

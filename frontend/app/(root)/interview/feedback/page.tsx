@@ -14,7 +14,7 @@ export default function FeedbackPage() {
   const [feedback, setFeedback] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [saved, setSaved] = useState(false);
-  const [progress, setProgress] = useState('Initiating flight analysis...');
+  const [progress, setProgress] = useState('Initiating analysis...');
   const hasStartedFetch = useRef(false);
 
   useEffect(() => {
@@ -59,7 +59,7 @@ export default function FeedbackPage() {
           result: codingResult
       };
       
-      setProgress('Processing flight data (ETA: 15-30s)...');
+      setProgress('Processing interview data (ETA: 15-30s)...');
       
       // Generate feedback from AI
       const data = await generateFeedback(interviewData, codingData);
@@ -68,7 +68,7 @@ export default function FeedbackPage() {
       // Cache the feedback
       localStorage.setItem('generatedFeedback', JSON.stringify(data));
       
-      setProgress('Saving flight log...');
+      setProgress('Saving interview data...');
       
       // Save to database if authenticated
       if (isAuthenticated() && interviewId) {
@@ -79,15 +79,15 @@ export default function FeedbackPage() {
           await saveInterviewFeedback(id, data);
           
           setSaved(true);
-          toast.success('Mission saved to flight log!');
+          toast.success('Interview saved to history!');
         } catch (saveError) {
           console.error('Failed to save to database:', saveError);
-          toast.error('Failed to save mission data');
+          toast.error('Failed to save interview data');
         }
       }
     } catch (error) {
       console.error("Failed to generate feedback", error);
-      toast.error('Mission analysis failed');
+      toast.error('Analysis failed');
     } finally {
       setLoading(false);
     }
@@ -125,22 +125,22 @@ export default function FeedbackPage() {
       <div className="min-h-screen flex flex-col items-center justify-center p-6 sm:p-10 text-center bg-dark-100">
         <div className="relative">
             <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-primary-200 mb-6"></div>
-            <Plane className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-[130%] text-primary-200 h-6 w-6 animate-pulse" />
+            <Target className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-[130%] text-primary-200 h-6 w-6 animate-pulse" />
         </div>
-        <h2 className="text-xl text-white font-bold tracking-wide">ANALYZING FLIGHT DATA</h2>
+        <h2 className="text-xl text-white font-bold tracking-wide">ANALYZING INTERVIEW</h2>
         <p className="text-sm text-light-400 mt-2 max-w-md animate-pulse">{progress}</p>
         
         <div className="mt-8 p-4 bg-primary-200/10 border border-primary-200/30 rounded-lg max-w-sm">
           <p className="text-xs text-primary-100 flex items-center gap-2">
             <AlertCircle className="h-4 w-4" /> 
-            <strong>Do not abort mission.</strong> Analysis in progress.
+            <strong>Do not close.</strong> Analysis in progress.
           </p>
         </div>
       </div>
     );
   }
   
-  if (!feedback) return <div className="p-10 text-center text-red-500">Mission Analysis Failed. Please retry.</div>;
+  if (!feedback) return <div className="p-10 text-center text-red-500">Analysis Failed. Please retry.</div>;
 
   return (
     <div className="min-h-screen px-4 sm:px-6 lg:px-8 py-8 bg-dark-100">
@@ -157,10 +157,10 @@ export default function FeedbackPage() {
                    <div className="h-8 w-8 rounded-full bg-primary-200 flex items-center justify-center text-white">
                         <CheckCircle className="h-5 w-5" />
                    </div>
-                   <h2 className="text-light-400 font-bold uppercase tracking-widest text-xs">Mission Debrief</h2>
+                   <h2 className="text-light-400 font-bold uppercase tracking-widest text-xs">Interview Feedback</h2>
                </div>
                
-               <h1 className="text-4xl font-bold text-white mb-6">Flight Analysis Complete</h1>
+               <h1 className="text-4xl font-bold text-white mb-6">Analysis Complete</h1>
                
                <div className="flex flex-wrap gap-8 items-end">
                    <div>
@@ -179,7 +179,7 @@ export default function FeedbackPage() {
                    
                     {saved && (
                         <div className="ml-auto flex items-center gap-2 text-success-200 text-sm bg-success-200/10 px-3 py-1.5 rounded-full border border-success-200/20">
-                            <CheckCircle className="h-3 w-3" /> Flight Log Saved
+                            <CheckCircle className="h-3 w-3" /> Interview Saved
                         </div>
                     )}
                </div>
@@ -192,7 +192,7 @@ export default function FeedbackPage() {
           <div className="card p-6 border-l-4 border-l-primary-200">
               <div className="flex justify-between items-start mb-4">
                   <div>
-                      <h3 className="text-lg font-bold text-white">Communication Protocol</h3>
+                      <h3 className="text-lg font-bold text-white">Communication Skills</h3>
                       <p className="text-xs text-light-400">Verbal & Technical Articulation</p>
                   </div>
                   <Target className="h-6 w-6 text-primary-200" />
@@ -207,7 +207,7 @@ export default function FeedbackPage() {
           <div className="card p-6 border-l-4 border-l-primary-300">
                <div className="flex justify-between items-start mb-4">
                   <div>
-                      <h3 className="text-lg font-bold text-white">Technical Maneuvers</h3>
+                      <h3 className="text-lg font-bold text-white">Technical Skills</h3>
                       <p className="text-xs text-light-400">Code Quality & Efficiency</p>
                   </div>
                   <Target className="h-6 w-6 text-primary-300" />
@@ -224,7 +224,7 @@ export default function FeedbackPage() {
            <div className="card p-6">
                <div className="flex items-center gap-2 mb-4 border-b border-white/5 pb-4">
                    <CheckCircle className="h-5 w-5 text-success-200" />
-                   <h3 className="font-bold text-white">Flight Highlights</h3>
+                   <h3 className="font-bold text-white">Strengths</h3>
                </div>
                <ul className="space-y-3">
                    {feedback.strengths?.map((s:string, i:number) => (
@@ -239,7 +239,7 @@ export default function FeedbackPage() {
            <div className="card p-6">
                <div className="flex items-center gap-2 mb-4 border-b border-white/5 pb-4">
                    <AlertCircle className="h-5 w-5 text-destructive-100" />
-                   <h3 className="font-bold text-white">Course Corrections</h3>
+                   <h3 className="font-bold text-white">Areas for Improvement</h3>
                </div>
                <ul className="space-y-3">
                    {feedback.weaknesses?.map((w:string, i:number) => (
@@ -255,8 +255,8 @@ export default function FeedbackPage() {
         {/* Detailed Feedback */}
         <div className="card p-8">
             <h3 className="font-bold text-white mb-4 flex items-center gap-2">
-                <Plane className="h-5 w-5 text-primary-200 rotate-90" /> 
-                Mission Analysis Report
+                <Target className="h-5 w-5 text-primary-200" /> 
+                Detailed Report
             </h3>
             <div className="prose prose-invert max-w-none text-light-100 text-sm leading-relaxed whitespace-pre-wrap bg-dark-300/30 p-6 rounded-xl border border-white/5">
                 {feedback.detailedFeedback}
@@ -266,17 +266,17 @@ export default function FeedbackPage() {
         {/* Action Buttons */}
         <div className="flex flex-col sm:flex-row justify-center gap-4 pt-4">
             <Button onClick={goHome} size="lg" variant="ghost" className="text-light-400 hover:text-white hover:bg-white/5">
-              <Home className="mr-2 h-4 w-4" /> Return to Base
+              <Home className="mr-2 h-4 w-4" /> Return to Dashboard
             </Button>
             
             <Button onClick={startNewInterview} size="lg" className="btn-primary min-w-[200px]">
-              <RotateCcw className="mr-2 h-4 w-4" /> Relaunch Mission
+              <RotateCcw className="mr-2 h-4 w-4" /> Start New Interview
             </Button>
             
             {isAuthenticated() && (
               <Button asChild size="lg" className="btn-secondary min-w-[200px]">
                 <Link href="/interview/history">
-                    Flight Logs <ArrowRight className="ml-2 h-4 w-4" />
+                    History <ArrowRight className="ml-2 h-4 w-4" />
                 </Link>
               </Button>
             )}

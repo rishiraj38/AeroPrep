@@ -8,6 +8,7 @@ import { getInterviewHistory } from '@/lib/api'
 import { useRouter } from 'next/navigation'
 import { Rocket, BarChart2, Palette, Server, Layers, Clock, CheckCircle, TrendingUp, Shield, Plane, ArrowRight } from 'lucide-react'
 import { Logo } from '@/components/Logo'
+import { LandingHero } from '@/components/LandingHero'
 
 interface Interview {
   id: number;
@@ -63,6 +64,10 @@ export default function HomePage() {
     router.refresh();
   };
 
+  if (!user && !loading) {
+    return <LandingHero />;
+  }
+
   return (
     <div className="min-h-screen px-4 sm:px-6 lg:px-8 py-6 max-w-7xl mx-auto">
       {/* Hero / Welcome Section */}
@@ -74,18 +79,18 @@ export default function HomePage() {
                 </h2>
                 <p className="text-lg text-light-100 mb-8 max-w-lg">
                     {user 
-                        ? "Ready to reach new heights? Your flight plan for interview success is ready." 
-                        : "Master your technical interviews with our precision-engineered flight simulator for your career."}
+                        ? "Ready to reach new heights? Your preparation plan for interview success is ready." 
+                        : "Master your technical interviews with our precision-engineered interview simulator for your career."}
                 </p>
                 
                 <div className="flex flex-wrap gap-4">
                     <Link href={user ? "/interview/create" : "/sign-up"} className="btn-primary flex items-center gap-2">
                         <Rocket className="h-4 w-4" /> 
-                        {user ? "Start New Session" : "Start New Mission"}
+                        {user ? "Start New Interview" : "Start Preparation"}
                     </Link>
                     {user && (
                         <Link href="/interview/history" className="btn-secondary flex items-center gap-2">
-                            <BarChart2 className="h-4 w-4" /> Flight Logs
+                            <BarChart2 className="h-4 w-4" /> History
                         </Link>
                     )}
                 </div>
@@ -108,7 +113,7 @@ export default function HomePage() {
                 <div>
                    <p className="text-light-400 text-sm font-medium uppercase tracking-wider mb-2">Overall Performance</p>
                    <h3 className="text-4xl font-bold text-white mb-1">{averageScore > 0 ? averageScore : '-'}<span className="text-xl text-light-600">/100</span></h3>
-                   <p className="text-xs text-light-400">Average across {interviews.filter(i => i.status === 'completed').length} completed sessions</p>
+                   <p className="text-xs text-light-400">Average across {interviews.filter(i => i.status === 'completed').length} completed interviews</p>
                 </div>
                 <div className="w-full bg-dark-300 h-1.5 rounded-full mt-6 overflow-hidden">
                     <div className="bg-primary-200 h-full rounded-full" style={{ width: `${averageScore}%` }}></div>
@@ -123,7 +128,7 @@ export default function HomePage() {
                     </div>
                     <div>
                         <h4 className="text-white font-bold text-xl">{interviews.length}</h4>
-                        <p className="text-sm text-light-400">Total Sessions</p>
+                        <p className="text-sm text-light-400">Total Interviews</p>
                     </div>
                  </div>
                  <div className="flex items-center gap-4">
@@ -140,7 +145,7 @@ export default function HomePage() {
             {/* Latest Activity */}
             <div className="card p-0 overflow-hidden flex flex-col">
                 <div className="p-4 border-b border-white/5 bg-white/5 flex justify-between items-center">
-                    <h3 className="font-semibold text-white">Recent Flight Logs</h3>
+                    <h3 className="font-semibold text-white">Recent Interviews</h3>
                     <Link href="/interview/history" className="text-xs text-primary-200 hover:text-white transition-colors">View All</Link>
                 </div>
                 <div className="flex-1 overflow-y-auto max-h-[200px] p-2">
@@ -153,7 +158,7 @@ export default function HomePage() {
                                     <div className="flex items-center gap-3">
                                         <div className={`h-2 w-2 rounded-full ${i.status === 'completed' ? 'bg-success-200' : 'bg-yellow-500'}`}></div>
                                         <div>
-                                            <p className="text-sm text-white font-medium">Session #{i.id}</p>
+                                            <p className="text-sm text-white font-medium">Interview #{i.id}</p>
                                             <p className="text-xs text-light-400">{new Date(i.createdAt).toLocaleDateString()}</p>
                                         </div>
                                     </div>
@@ -197,7 +202,7 @@ export default function HomePage() {
                    <p className="text-sm text-light-400 mb-4 h-10">{item.desc}</p>
                    
                    <div className="flex items-center text-xs font-bold text-primary-200 group-hover:text-white transition-colors">
-                      LAUNCH MODULE <ArrowRight className="ml-2 h-3 w-3 group-hover:translate-x-1 transition-transform" />
+                      START MODULE <ArrowRight className="ml-2 h-3 w-3 group-hover:translate-x-1 transition-transform" />
                    </div>
                </div>
              </Link>
@@ -207,7 +212,7 @@ export default function HomePage() {
       
       {!user && (
           <div className="mt-20 text-center border-t border-white/5 pt-10">
-              <p className="text-light-600 text-sm">© 2025 Aero Prep. All systems nominal.</p>
+              <p className="text-light-600 text-sm">© 2025 AeroPrep Inc. All rights reserved.</p>
           </div>
       )}
     </div>

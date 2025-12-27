@@ -87,6 +87,8 @@ function CreateInterviewContent() {
     }
   }, [roleParam]);
 
+
+
   const handleSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (loading) return;
@@ -309,6 +311,8 @@ Tech Stack: ${manualTech || "Not specified"}.`;
         </div>
 
       </div>
+      
+
     </div>
   );
 }
