@@ -1,6 +1,6 @@
 "use client";
 
-import ProtectedRouteWrapper from '@/components/ProtectedRouteWrapper'
+
 import React, { ReactNode, useEffect, useState } from 'react'
 import { isAuthenticated, getUser } from '@/lib/auth'
 import { useRouter, usePathname } from 'next/navigation'
