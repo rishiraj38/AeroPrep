@@ -13,7 +13,7 @@ const imagekit = new ImageKit({
 
 // Services
 const { extractTextFromPdf } = require('./services/pdfService');
-const { generateQuestions, generateCodingChallenge, evaluateCode, generateFeedback } = require('./services/aiService');
+const { generateQuestions, generateNextQuestion, generateCodingChallenge, evaluateCode, generateFeedback } = require('./services/aiService');
 const { register, login, authMiddleware, getUserById } = require('./services/authService');
 const { 
   createInterview, 
@@ -85,7 +85,7 @@ app.get('/auth/me', authMiddleware, async (req, res) => {
 
 // INTERVIEW ROUTES (Protected)
 
-// Create interview and generate questions
+// Create interview (questions will be generated dynamically during session)
 app.post('/interviews', authMiddleware, async (req, res) => {
   const { resumeURL, jobDescription, resumeText } = req.body;
   
@@ -111,12 +111,17 @@ app.post('/interviews', authMiddleware, async (req, res) => {
         text = jobDescription;
     }
 
-    const questions = await generateQuestions(text, jobDescription);
+    // Create interview WITHOUT pre-generating questions
+    // Questions will be generated dynamically during the session
+    const interview = await createInterview(req.userId, resumeURL, jobDescription, []);
     
-    // Save to database
-    const interview = await createInterview(req.userId, resumeURL, jobDescription, questions);
-    
-    res.status(201).json({ interview, questions });
+    // Return the interview and resumeText for dynamic question generation
+    res.status(201).json({ 
+      interview: {
+        ...interview,
+        resumeText: text  // Include extracted/provided text for frontend to use
+      }
+    });
   } catch (error) {
     console.error('Error creating interview:', error);
     res.status(500).json({ error: error.message });
@@ -215,6 +220,32 @@ app.post('/generate-questions', async (req, res) => {
     res.json({ questions });
   } catch (error) {
     console.error('Error generating interview questions:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Generate next question dynamically based on conversation history
+app.post('/generate-next-question', async (req, res) => {
+  const { resumeText, jobDescription, conversationHistory, questionNumber } = req.body;
+
+  if (!resumeText && !jobDescription) {
+    return res.status(400).json({ error: 'resumeText or jobDescription is required' });
+  }
+
+  try {
+    console.log(`Generating question ${questionNumber} with ${conversationHistory?.length || 0} previous Q&As`);
+    
+    const questionData = await generateNextQuestion(
+      resumeText || '',
+      jobDescription || '',
+      conversationHistory || [],
+      questionNumber || 1
+    );
+    
+    console.log(`Question ${questionNumber} generated successfully.`);
+    res.json({ question: questionData });
+  } catch (error) {
+    console.error('Error generating next question:', error);
     res.status(500).json({ error: error.message });
   }
 });

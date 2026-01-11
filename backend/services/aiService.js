@@ -3,7 +3,7 @@ require('dotenv').config();
 // OpenRouter API configuration
 // Switched to Nvidia Nemotron-3 Nano - fastest and high quality free model
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const MODEL = 'nvidia/nemotron-3-nano-30b-a3b:free';
+const MODEL = 'openai/gpt-oss-safeguard-20b';
 
 /**
  * Helper function to call OpenRouter API
@@ -103,6 +103,64 @@ async function generateQuestions(resumeText, jobDescription = "") {
   } catch (error) {
     console.error('Error generating questions:', error);
     throw new Error('Failed to generate interview questions');
+  }
+}
+
+/**
+ * Generates the next interview question based on conversation history.
+ * This creates a dynamic, adaptive interview experience.
+ */
+async function generateNextQuestion(resumeText, jobDescription = "", conversationHistory = [], questionNumber = 1, totalQuestions = 10) {
+  try {
+    // Build conversation context
+    let conversationContext = "";
+    if (conversationHistory.length > 0) {
+      conversationContext = conversationHistory.map((qa, i) => 
+        `Q${i + 1}: ${qa.question}\nCandidate's Answer: ${qa.answer}`
+      ).join("\n\n");
+    }
+
+    const prompt = `You are an expert technical interviewer at a top-tier tech company conducting a live interview.
+    
+You are asking question ${questionNumber} of ${totalQuestions}.
+
+CANDIDATE'S RESUME:
+${resumeText}
+
+JOB DESCRIPTION:
+${jobDescription || "Not provided (Focus on general software engineering skills based on resume)"}
+
+${conversationHistory.length > 0 ? `INTERVIEW SO FAR:\n${conversationContext}\n` : ""}
+
+INSTRUCTIONS:
+${questionNumber === 1 ? 
+  `This is the FIRST question. Start with a warm, engaging question about their most impressive or recent project from the resume. Make them comfortable.` : 
+  `Based on the candidate's previous answer, generate a thoughtful follow-up question that:
+  1. Probes DEEPER into something they mentioned (if their answer was interesting)
+  2. Or pivots to a new topic from their resume if the previous answer was weak
+  3. Consider the flow: earlier questions should be easier, later questions (7-10) should be more challenging (system design, trade-offs, edge cases)`
+}
+
+QUESTION TYPES TO CONSIDER:
+- Questions 1-3: Experience-based, projects from resume, "tell me about..."
+- Questions 4-6: Technical deep-dives, "how would you scale...", "what trade-offs..."
+- Questions 7-9: System design, architecture decisions, handling failures
+- Question 10: Behavioral or a challenging scenario question
+
+Return ONLY a valid JSON object with these fields:
+{
+  "question": "Your question text here",
+  "expectedAnswer": "Key points a strong candidate should mention"
+}
+
+NO introductory text. NO markdown. Just the JSON.`;
+
+    const response = await callOpenRouter(prompt, `Generate Question ${questionNumber}`);
+    const cleanedText = cleanJsonResponse(response);
+    return JSON.parse(cleanedText);
+  } catch (error) {
+    console.error('Error generating next question:', error);
+    throw new Error('Failed to generate next interview question');
   }
 }
 
@@ -245,6 +303,7 @@ Return ONLY the valid JSON object, no other text.`;
 
 module.exports = {
   generateQuestions,
+  generateNextQuestion,
   generateCodingChallenge,
   evaluateCode,
   generateFeedback

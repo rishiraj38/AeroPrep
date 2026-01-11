@@ -107,59 +107,58 @@ function CreateInterviewContent() {
     setError('');
 
     try {
-      // Clear previous
+      // Clear previous session data
       localStorage.removeItem('generatedFeedback');
       localStorage.removeItem('codingChallenge');
       localStorage.removeItem('codingResult');
       localStorage.removeItem('codingCode');
       localStorage.removeItem('interviewAnswers');
+      localStorage.removeItem('interviewQuestions');
+      localStorage.removeItem('conversationHistory');
       
       // Determine Context
       let finalResumeURL = "";
       let practiceResumeText = "";
+      const jobDescription = manualDesc || "";
 
       if (mode === 'upload') {
           finalResumeURL = resumeURL;
-          // Resume Text will be extracted by backend from PDF
+          // Resume text will be extracted in session page if needed
+          // Store a flag that we need PDF extraction
+          localStorage.setItem('needsPDFExtraction', 'true');
       } else {
           // Construct text context from manual inputs
           practiceResumeText = `Candidate Role: ${manualRole}. 
 Job Description: ${manualDesc}
 Tech Stack: ${manualTech || "Not specified"}.`;
           
-          // For authenticated users, we need a URL for DB schema. 
-          // Since we made resumeURL optional in schema, we can match "manual" indicator or empty.
-          // BUT: Prisma might default to null. Let's send empty string or handle logic.
-          // Let's pass empty string if manual.
           finalResumeURL = ""; 
+          localStorage.setItem('needsPDFExtraction', 'false');
       }
 
+      // Store context for dynamic question generation
+      localStorage.setItem('resumeURL', finalResumeURL);
+      localStorage.setItem('resumeText', practiceResumeText);
+      localStorage.setItem('jobDescription', jobDescription);
+      
       if (!isAuthenticated()) {
-        const { generateQuestions } = await import('@/lib/api');
-        
-        // Pass empty URL if manual mode, generateQuestions will use text
-        const questions = await generateQuestions(
-            finalResumeURL, 
-            manualDesc, 
-            practiceResumeText
-        );
-        
-        localStorage.setItem('interviewQuestions', JSON.stringify(questions));
-        localStorage.setItem('resumeURL', finalResumeURL); 
-        localStorage.setItem('practiceResumeText', practiceResumeText); 
+        // For unauthenticated users, just go to session page
+        // Questions will be generated dynamically there
         localStorage.setItem('interviewId', '');
-        
         router.push('/interview/session');
         return;
       }
       
-      // Authenticated Flow
-      const data = await createInterview(finalResumeURL, manualDesc || "Interview based on uploaded resume", practiceResumeText);
+      // Authenticated Flow - create interview record (without pre-generated questions)
+      // We'll add questions to DB as they're generated
+      const data = await createInterview(finalResumeURL, jobDescription, practiceResumeText);
       
       localStorage.setItem('interviewId', String(data.interview.id));
-      localStorage.setItem('interviewQuestions', JSON.stringify(data.questions));
-      localStorage.setItem('resumeURL', finalResumeURL);
-      localStorage.setItem('practiceResumeText', practiceResumeText); // Might be empty if PDF upload flow (backend extracts)
+      
+      // Also store the extracted resume text from backend if available
+      if (data.interview.resumeText) {
+        localStorage.setItem('resumeText', data.interview.resumeText);
+      }
       
       router.push('/interview/session');
     } catch (err: any) {

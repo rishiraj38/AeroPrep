@@ -1,68 +1,158 @@
 "use client";
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { useRouter } from 'next/navigation';
-import { saveInterviewAnswers } from '@/lib/api';
+import { saveInterviewAnswers, generateNextQuestion } from '@/lib/api';
 import { isAuthenticated } from '@/lib/auth';
-import { Bot, Loader2, Flag, Code2, CheckCircle, SkipForward, ArrowLeft, ArrowRight } from 'lucide-react';
+import { Bot, Loader2, Flag, Code2, CheckCircle, SkipForward, ArrowLeft, ArrowRight, Sparkles } from 'lucide-react';
 
-interface Question {
+interface ConversationItem {
   question: string;
   answer: string;
+  expectedAnswer?: string;
 }
+
+const TOTAL_QUESTIONS = 10;
 
 export default function InterviewSessionPage() {
   const router = useRouter();
-  const [questions, setQuestions] = useState<Question[]>([]);
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const [currentQuestion, setCurrentQuestion] = useState<string>("");
+  const [currentQuestionNumber, setCurrentQuestionNumber] = useState(1);
   const [isStarted, setIsStarted] = useState(false);
   const [userAnswer, setUserAnswer] = useState("");
-  const [answers, setAnswers] = useState<{questionIndex: number, answer: string}[]>([]);
+  const [conversationHistory, setConversationHistory] = useState<ConversationItem[]>([]);
   const [showCodingChoice, setShowCodingChoice] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isGeneratingQuestion, setIsGeneratingQuestion] = useState(false);
+  const [error, setError] = useState("");
+  
+  // Context for question generation
+  const [resumeText, setResumeText] = useState("");
+  const [jobDescription, setJobDescription] = useState("");
 
+  // Load context from localStorage
   useEffect(() => {
-    const stored = localStorage.getItem('interviewQuestions');
-    if (stored) {
-      setQuestions(JSON.parse(stored));
-    } else {
+    const storedResumeText = localStorage.getItem('resumeText') || '';
+    const storedJobDescription = localStorage.getItem('jobDescription') || '';
+    
+    if (!storedResumeText && !storedJobDescription) {
       router.push('/interview/create');
+      return;
     }
-  }, []);
+    
+    setResumeText(storedResumeText);
+    setJobDescription(storedJobDescription);
+    
+    // Load any existing conversation history (for page refresh scenarios)
+    const storedHistory = localStorage.getItem('conversationHistory');
+    if (storedHistory) {
+      const history = JSON.parse(storedHistory);
+      setConversationHistory(history);
+      setCurrentQuestionNumber(history.length + 1);
+    }
+  }, [router]);
 
-  const startInterview = () => {
+  // Generate the next question
+  const fetchNextQuestion = useCallback(async () => {
+    if (isGeneratingQuestion) return;
+    
+    setIsGeneratingQuestion(true);
+    setError("");
+    
+    try {
+      const questionData = await generateNextQuestion(
+        resumeText,
+        jobDescription,
+        conversationHistory.map(c => ({ question: c.question, answer: c.answer })),
+        currentQuestionNumber
+      );
+      
+      setCurrentQuestion(questionData.question);
+    } catch (err: any) {
+      console.error('Error generating question:', err);
+      setError(err.message || 'Failed to generate question. Please try again.');
+    } finally {
+      setIsGeneratingQuestion(false);
+    }
+  }, [resumeText, jobDescription, conversationHistory, currentQuestionNumber, isGeneratingQuestion]);
+
+  // Start interview - generate first question
+  const startInterview = async () => {
     setIsStarted(true);
-    setCurrentIndex(0);
+    await fetchNextQuestion();
   };
 
-  const submitAnswer = () => {
-    if (isSaving) return;
+  // Submit answer and get next question
+  const submitAnswer = async () => {
+    if (isSaving || isGeneratingQuestion) return;
     
-    const newAnswers = [...answers, { questionIndex: currentIndex, answer: userAnswer }];
-    setAnswers(newAnswers);
-    localStorage.setItem('interviewAnswers', JSON.stringify(newAnswers));
+    // Add current Q&A to history
+    const newConversation: ConversationItem = {
+      question: currentQuestion,
+      answer: userAnswer
+    };
     
-    if (currentIndex >= questions.length - 1) {
-      finishQA(newAnswers);
-    } else {
-      setCurrentIndex(currentIndex + 1);
-      setUserAnswer("");
+    const updatedHistory = [...conversationHistory, newConversation];
+    setConversationHistory(updatedHistory);
+    localStorage.setItem('conversationHistory', JSON.stringify(updatedHistory));
+    
+    // Also save to interviewAnswers format for compatibility
+    const answerData = updatedHistory.map((c, i) => ({ questionIndex: i, answer: c.answer }));
+    localStorage.setItem('interviewAnswers', JSON.stringify(answerData));
+    
+    // Check if we've reached the end
+    if (currentQuestionNumber >= TOTAL_QUESTIONS) {
+      await finishQA(updatedHistory);
+      return;
+    }
+    
+    // Move to next question
+    setCurrentQuestionNumber(prev => prev + 1);
+    setUserAnswer("");
+    
+    // Generate next question
+    setIsGeneratingQuestion(true);
+    setError("");
+    
+    try {
+      const questionData = await generateNextQuestion(
+        resumeText,
+        jobDescription,
+        updatedHistory.map(c => ({ question: c.question, answer: c.answer })),
+        currentQuestionNumber + 1
+      );
+      
+      setCurrentQuestion(questionData.question);
+    } catch (err: any) {
+      console.error('Error generating next question:', err);
+      setError(err.message || 'Failed to generate next question.');
+    } finally {
+      setIsGeneratingQuestion(false);
     }
   };
 
-  const finishQA = async (finalAnswers: {questionIndex: number, answer: string}[]) => {
+  const finishQA = async (finalHistory: ConversationItem[]) => {
     setIsSaving(true);
     
     const interviewId = localStorage.getItem('interviewId');
+    const answers = finalHistory.map((c, i) => ({ questionIndex: i, answer: c.answer }));
+    
     if (isAuthenticated() && interviewId) {
       try {
-        await saveInterviewAnswers(parseInt(interviewId), finalAnswers);
+        await saveInterviewAnswers(parseInt(interviewId), answers);
       } catch (err) {
         console.error('Failed to save answers:', err);
       }
     }
+    
+    // Store questions for feedback generation
+    const questionsForFeedback = finalHistory.map(c => ({
+      question: c.question,
+      answer: c.expectedAnswer || ''
+    }));
+    localStorage.setItem('interviewQuestions', JSON.stringify(questionsForFeedback));
     
     setIsSaving(false);
     setShowCodingChoice(true);
@@ -83,12 +173,15 @@ export default function InterviewSessionPage() {
     router.push('/interview/feedback');
   };
 
-  if (questions.length === 0) return (
-    <div className="p-10 text-center flex flex-col items-center justify-center min-h-screen">
-       <Loader2 className="h-8 w-8 animate-spin text-primary mb-4" />
-       <p>Loading Interview...</p>
-    </div>
-  );
+  // Initial loading state
+  if (!resumeText && !jobDescription) {
+    return (
+      <div className="p-10 text-center flex flex-col items-center justify-center min-h-screen">
+        <Loader2 className="h-8 w-8 animate-spin text-primary mb-4" />
+        <p>Loading Interview...</p>
+      </div>
+    );
+  }
 
   // Show coding round choice screen
   if (showCodingChoice) {
@@ -150,15 +243,20 @@ export default function InterviewSessionPage() {
              <ArrowLeft className="mr-2 h-4 w-4" /> Back to Dashboard
            </Button>
            <h2 className="text-xl font-semibold text-muted-foreground hidden sm:block">
-             Question {currentIndex + 1} / {questions.length}
+             Question {currentQuestionNumber} / {TOTAL_QUESTIONS}
            </h2>
            {!isStarted && (
              <Button 
                onClick={startInterview} 
                size="lg" 
                className="shadow-[0_0_20px_rgba(59,130,246,0.6)] border border-primary-200 animate-[pulse_2s_cubic-bezier(0.4,0,0.6,1)_infinite] hover:animate-none hover:scale-105 transition-all cursor-pointer font-bold tracking-wide"
+               disabled={isGeneratingQuestion}
              >
-               Start Interview
+               {isGeneratingQuestion ? (
+                 <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Preparing...</>
+               ) : (
+                 'Start Interview'
+               )}
              </Button>
            )}
         </div>
@@ -167,7 +265,7 @@ export default function InterviewSessionPage() {
         <div className="w-full max-w-3xl h-2 bg-muted rounded-full overflow-hidden">
           <div 
             className="h-full bg-primary transition-all duration-300"
-            style={{ width: `${((currentIndex + 1) / questions.length) * 100}%` }}
+            style={{ width: `${(currentQuestionNumber / TOTAL_QUESTIONS) * 100}%` }}
           />
         </div>
 
@@ -178,36 +276,69 @@ export default function InterviewSessionPage() {
                 <div className="min-w-[50px] h-[50px] rounded-full bg-primary/10 flex items-center justify-center">
                    <Bot className="h-8 w-8 text-primary" />
                 </div>
-                <div>
-                   <h3 className="font-semibold mb-1">AI Interviewer</h3>
-                   <p className="text-lg leading-relaxed">{questions[currentIndex]?.question}</p>
+                <div className="flex-1">
+                   <h3 className="font-semibold mb-1 flex items-center gap-2">
+                     AI Interviewer
+                     {isGeneratingQuestion && (
+                       <span className="flex items-center gap-1 text-xs text-muted-foreground font-normal">
+                         <Sparkles className="h-3 w-3 animate-pulse" /> Thinking...
+                       </span>
+                     )}
+                   </h3>
+                   {isGeneratingQuestion ? (
+                     <div className="flex items-center gap-3 py-4">
+                       <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                       <span className="text-muted-foreground">Generating your next question based on your previous answers...</span>
+                     </div>
+                   ) : currentQuestion ? (
+                     <p className="text-lg leading-relaxed">{currentQuestion}</p>
+                   ) : !isStarted ? (
+                     <p className="text-muted-foreground">Click "Start Interview" to begin your personalized interview session.</p>
+                   ) : null}
+                   
+                   {error && (
+                     <div className="mt-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+                       {error}
+                       <Button 
+                         variant="link" 
+                         className="text-red-400 underline ml-2 p-0 h-auto" 
+                         onClick={fetchNextQuestion}
+                       >
+                         Retry
+                       </Button>
+                     </div>
+                   )}
                 </div>
              </div>
           </div>
 
-          <div className="bg-muted/30 border rounded-lg p-6">
-             <label className="block text-sm font-medium mb-2">Your Answer</label>
-             <textarea 
-               className="w-full min-h-[120px] p-3 rounded-md border bg-background cursor-text"
-               placeholder="Type your answer here..."
-               value={userAnswer}
-               onChange={(e) => setUserAnswer(e.target.value)}
-             />
-          </div>
+          {isStarted && currentQuestion && !isGeneratingQuestion && (
+            <div className="bg-muted/30 border rounded-lg p-6">
+               <label className="block text-sm font-medium mb-2">Your Answer</label>
+               <textarea 
+                 className="w-full min-h-[120px] p-3 rounded-md border bg-background cursor-text"
+                 placeholder="Type your answer here..."
+                 value={userAnswer}
+                 onChange={(e) => setUserAnswer(e.target.value)}
+               />
+            </div>
+          )}
         </div>
 
         {/* User Controls */}
         <div className="w-full max-w-2xl flex flex-col items-center gap-4">
-           {isStarted && (
+           {isStarted && currentQuestion && !isGeneratingQuestion && (
              <div className="flex gap-4">
                <Button 
                  onClick={submitAnswer} 
                  className="btn-primary min-w-[200px] py-6 text-lg cursor-pointer"
-                 disabled={!userAnswer.trim() || isSaving} 
+                 disabled={!userAnswer.trim() || isSaving || isGeneratingQuestion} 
                >
                  {isSaving ? (
                    <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving...</>
-                 ) : (currentIndex === questions.length - 1 ? (
+                 ) : isGeneratingQuestion ? (
+                   <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Generating...</>
+                 ) : (currentQuestionNumber === TOTAL_QUESTIONS ? (
                    <><Flag className="mr-2 h-4 w-4" /> Finish Q&A</>
                  ) : (
                    <>Next Question <ArrowRight className="ml-2 h-4 w-4" /></>

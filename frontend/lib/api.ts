@@ -36,6 +36,32 @@ export async function generateQuestions(resumeURL: string, jobDescription: strin
   }
 }
 
+export async function generateNextQuestion(
+  resumeText: string,
+  jobDescription: string,
+  conversationHistory: { question: string; answer: string }[],
+  questionNumber: number
+): Promise<{ question: string; expectedAnswer: string }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/generate-next-question`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ resumeText, jobDescription, conversationHistory, questionNumber }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to generate next question');
+    }
+
+    const data = await response.json();
+    return data.question;
+  } catch (error) {
+    console.error('API Error:', error);
+    throw error;
+  }
+}
+
 export async function generateCodingChallenge(resumeURL: string, resumeText: string = '') {
   try {
     const response = await fetch(`${API_BASE_URL}/generate-coding-question`, {

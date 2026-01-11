@@ -1,20 +1,23 @@
 const { prisma } = require('./prismaClient');
 
-// Create a new interview with questions
-async function createInterview(userId, resumeURL, jobDescription, questions) {
+// Create a new interview with optional questions
+async function createInterview(userId, resumeURL, jobDescription, questions = []) {
   const interview = await prisma.interview.create({
     data: {
       userId,
       resumeURL,
       jobDescription,
       status: 'in_progress',
-      questions: {
-        create: questions.map((q, index) => ({
-          questionText: q.question,
-          expectedAnswer: q.answer,
-          order: index + 1
-        }))
-      }
+      // Only create questions if array is non-empty
+      ...(questions.length > 0 && {
+        questions: {
+          create: questions.map((q, index) => ({
+            questionText: q.question,
+            expectedAnswer: q.answer || q.expectedAnswer || '',
+            order: index + 1
+          }))
+        }
+      })
     },
     include: {
       questions: true
@@ -22,6 +25,20 @@ async function createInterview(userId, resumeURL, jobDescription, questions) {
   });
   
   return interview;
+}
+
+// Add a single question to an existing interview (for dynamic flow)
+async function addQuestionToInterview(interviewId, questionText, expectedAnswer, order) {
+  const question = await prisma.question.create({
+    data: {
+      interviewId,
+      questionText,
+      expectedAnswer: expectedAnswer || '',
+      order
+    }
+  });
+  
+  return question;
 }
 
 // Save user answers to questions
@@ -152,6 +169,7 @@ async function getInterviewById(interviewId, userId) {
 
 module.exports = {
   createInterview,
+  addQuestionToInterview,
   saveAnswers,
   saveCodingResult,
   saveFeedback,

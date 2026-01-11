@@ -2,9 +2,9 @@ name: AeroPrep CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, ai-bot-enhancements ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, ai-bot-enhancements ]
 
 jobs:
   backend-ci:
@@ -61,7 +61,7 @@ jobs:
       - name: Production Build Verification
         run: npm run build
         env:
-          NEXT_PUBLIC_API_URL: http://localhost:5000 # Mock URL for build phase
+          NEXT_PUBLIC_API_URL: http://localhost:5000
           
       - name: Run Tests
         run: npm run test
