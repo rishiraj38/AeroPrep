@@ -5,7 +5,9 @@
   "scripts": {
     "start": "node index.js",
     "build": "npx prisma generate",
-    "postinstall": "npx prisma generate"
+    "postinstall": "npx prisma generate",
+    "lint": "eslint .",
+    "test": "jest"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -24,5 +26,10 @@
     "jsonwebtoken": "^9.0.3",
     "pdf-extraction": "^1.0.2",
     "prisma": "^5.22.0"
+  },
+  "devDependencies": {
+    "eslint": "^9.0.0",
+    "jest": "^29.0.0",
+    "supertest": "^7.0.0"
   }
 }
