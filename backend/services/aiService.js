@@ -1,11 +1,11 @@
 require('dotenv').config();
 
 // Config Toggle
-const USE_OLLAMA = true;
+const USE_OLLAMA = process.env.USE_OLLAMA === 'true' || true; // Default to true if not specified, given current context
 
 // Ollama Config
-const OLLAMA_API_URL = 'http://127.0.0.1:11434/api/chat';
-const OLLAMA_MODEL = 'gemma2:9b';
+const OLLAMA_API_URL = process.env.OLLAMA_API_URL || 'https://uncrystallisable-lashon-gerundival.ngrok-free.dev/api/chat';
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'gemma2:9b';
 
 // OpenRouter Config
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
@@ -31,7 +31,11 @@ async function callAIProvider(messages, operationName = 'AI Call', maxTokens = 4
 
       if (USE_OLLAMA) {
         url = OLLAMA_API_URL;
-        headers = { 'Content-Type': 'application/json' };
+        headers = { 
+          'Content-Type': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'ngrok-skip-browser-warning': 'true'
+        };
         body = JSON.stringify({ 
           model: OLLAMA_MODEL, 
           messages, 
@@ -53,8 +57,13 @@ async function callAIProvider(messages, operationName = 'AI Call', maxTokens = 4
       clearTimeout(timeoutId);
 
       if (!response.ok) {
-        const error = await response.text();
-        console.error(`${USE_OLLAMA ? 'Ollama' : 'OpenRouter'} API Error:`, error);
+        const errorText = await response.text();
+        console.error(`${USE_OLLAMA ? 'Ollama' : 'OpenRouter'} API Error: Status ${response.status}`);
+        console.error(`Response Body:`, errorText);
+        // Also log headers for debugging (excluding sensitive ones)
+        const debugHeaders = {};
+        response.headers.forEach((v, k) => { if (k.toLowerCase() !== 'set-cookie') debugHeaders[k] = v; });
+        console.error(`Response Headers:`, JSON.stringify(debugHeaders, null, 2));
         throw new Error(`API Error: ${response.status}`);
       }
 
