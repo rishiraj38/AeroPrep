@@ -26,7 +26,7 @@ async function createInterview(userId, resumeURL, jobDescription, questions) {
 
 // Save user answers to questions
 async function saveAnswers(interviewId, answers) {
-  // answers format: [{ questionIndex: 0, answer: "..." }, ...]
+  // answers format: [{ questionIndex: 0, dynamicQuestion: "...", dynamicAnswer: "..." }, ...]
   const updatePromises = answers.map(async (ans) => {
     const question = await prisma.question.findFirst({
       where: {
@@ -38,12 +38,24 @@ async function saveAnswers(interviewId, answers) {
     if (question) {
       return prisma.question.update({
         where: { id: question.id },
-        data: { userAnswer: ans.answer }
+        data: { 
+          questionText: ans.dynamicQuestion,
+          expectedAnswer: "Evaluated dynamically by AI based on conversation.",
+          userAnswer: ans.dynamicAnswer 
+        }
       });
     }
   });
   
   await Promise.all(updatePromises);
+  
+  // Clean up unused static questions from the database
+  await prisma.question.deleteMany({
+    where: {
+      interviewId,
+      order: { gt: answers.length }
+    }
+  });
   
   return { success: true };
 }

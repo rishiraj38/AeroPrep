@@ -146,7 +146,8 @@ Tech Stack: ${manualTech || "Not specified"}.`;
         
         localStorage.setItem('interviewQuestions', JSON.stringify(questions));
         localStorage.setItem('resumeURL', finalResumeURL); 
-        localStorage.setItem('practiceResumeText', practiceResumeText); 
+        localStorage.setItem('resumeText', practiceResumeText);
+        localStorage.setItem('jobDescription', manualDesc);
         localStorage.setItem('interviewId', '');
         
         router.push('/interview/session');
@@ -159,7 +160,8 @@ Tech Stack: ${manualTech || "Not specified"}.`;
       localStorage.setItem('interviewId', String(data.interview.id));
       localStorage.setItem('interviewQuestions', JSON.stringify(data.questions));
       localStorage.setItem('resumeURL', finalResumeURL);
-      localStorage.setItem('practiceResumeText', practiceResumeText); // Might be empty if PDF upload flow (backend extracts)
+      localStorage.setItem('resumeText', practiceResumeText);
+      localStorage.setItem('jobDescription', manualDesc || '');
       
       router.push('/interview/session');
     } catch (err: any) {

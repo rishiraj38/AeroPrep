@@ -30,7 +30,7 @@ const Layout = ({children}: {children: ReactNode}) => {
 
   if (!mounted) return null;
 
-  const showSidebar = user && !['/sign-in', '/sign-up'].includes(pathname);
+  const showSidebar = user && !['/sign-in', '/sign-up'].includes(pathname) && !pathname.includes('/interview/session');
 
   return (
     <main className="min-h-screen bg-dark-100 bg-none font-sans selection:bg-primary-200/30 flex flex-col md:flex-row">

@@ -41,13 +41,24 @@ export default function FeedbackPage() {
   const fetchFeedback = async () => {
     try {
       const interviewId = localStorage.getItem('interviewId');
-      const interviewQuestions = JSON.parse(localStorage.getItem('interviewQuestions') || '[]');
-      const interviewAnswers = JSON.parse(localStorage.getItem('interviewAnswers') || '[]');
       
-      const interviewData = {
-          questions: interviewQuestions,
-          answers: interviewAnswers
-      };
+      // Use the actual live conversation transcript (WebSocket session produces this)
+      const rawTranscript = localStorage.getItem('interviewTranscript');
+      let interviewData: any[] = [];
+      
+      if (rawTranscript) {
+        // Real dynamic transcript: [{speaker: 'ai'|'user', text: '...'}, ...]
+        interviewData = JSON.parse(rawTranscript);
+      } else {
+        // Fallback: legacy Q&A format
+        const interviewQuestions = JSON.parse(localStorage.getItem('interviewQuestions') || '[]');
+        const interviewAnswers = JSON.parse(localStorage.getItem('interviewAnswers') || '[]');
+        interviewData = interviewQuestions.map((q: any, i: number) => ({
+          question: q.question || q.questionText,
+          answer: q.answer || q.expectedAnswer,
+          userAnswer: interviewAnswers[i]?.answer || ''
+        }));
+      }
       
       const codingChallenge = JSON.parse(localStorage.getItem('codingChallenge') || '{}');
       const codingResult = JSON.parse(localStorage.getItem('codingResult') || '{}');
@@ -59,7 +70,7 @@ export default function FeedbackPage() {
           result: codingResult
       };
       
-      setProgress('Processing interview data (ETA: 15-30s)...');
+      setProgress(`Analyzing ${interviewData.length} conversation turns... (This may take 20-30s)`);
       
       // Generate feedback from AI
       const data = await generateFeedback(interviewData, codingData);
@@ -92,6 +103,7 @@ export default function FeedbackPage() {
       setLoading(false);
     }
   };
+
 
   const goHome = () => {
     // Clear interview session data
