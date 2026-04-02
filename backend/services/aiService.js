@@ -4,7 +4,7 @@ require('dotenv').config();
 const USE_OLLAMA = process.env.USE_OLLAMA === 'true' || true; // Default to true if not specified, given current context
 
 // Ollama Config
-const OLLAMA_API_URL = process.env.OLLAMA_API_URL || 'https://uncrystallisable-lashon-gerundival.ngrok-free.dev/api/chat';
+const OLLAMA_API_URL = process.env.OLLAMA_API_URL || 'https://uncrystallisable-lashon-gerundival.ngrok-free.dev';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'gemma2:9b';
 
 // OpenRouter Config
