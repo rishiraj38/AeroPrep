@@ -18,7 +18,7 @@ export const Logo = ({ className, size = "md", isSnowing = false }: { className?
         src="/ap.png" 
         alt="Aero Prep Logo" 
         width={pxSize} 
-        height={pxSize} 
+        height={Math.round(pxSize * 2 / 3)} // the file is 600x400
         className="object-contain" 
         priority
       />

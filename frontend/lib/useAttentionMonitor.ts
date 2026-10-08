@@ -39,17 +39,22 @@ function isLookingAway(result: any): boolean {
 
 /**
  * Returns a short message to show the candidate, or null when all is well.
- * Does nothing unless `active` is true and the video element is playing a camera.
+ * Tab switches are noticed whenever `active` is true. The face tracking (a large download)
+ * is only loaded while `cameraOn` is true, that is, when there is a picture to look at.
  */
-export function useAttentionMonitor(videoRef: RefObject<HTMLVideoElement | null>, active: boolean): string | null {
+export function useAttentionMonitor(videoRef: RefObject<HTMLVideoElement | null>, active: boolean, cameraOn: boolean): string | null {
   const [nudge, setNudge] = useState<string | null>(null);
 
-  // Leaving the tab needs no camera
+  // Leaving the tab needs no camera. The nudge appears when the candidate comes back,
+  // which is the first moment they can see it.
   useEffect(() => {
     if (!active) return;
     let clear: NodeJS.Timeout;
+    let wasHidden = false;
     const onVisibility = () => {
-      if (!document.hidden) return;
+      if (document.hidden) { wasHidden = true; return; }
+      if (!wasHidden) return;
+      wasHidden = false;
       setNudge(NUDGES.leftTab);
       clearTimeout(clear);
       clear = setTimeout(() => setNudge(current => (current === NUDGES.leftTab ? null : current)), NUDGE_STAYS_MS * 2);
@@ -62,7 +67,7 @@ export function useAttentionMonitor(videoRef: RefObject<HTMLVideoElement | null>
   }, [active]);
 
   useEffect(() => {
-    if (!active) return;
+    if (!active || !cameraOn) return;
     let stopped = false;
     let timer: NodeJS.Timeout;
     let landmarker: any = null;
@@ -71,6 +76,7 @@ export function useAttentionMonitor(videoRef: RefObject<HTMLVideoElement | null>
     let lastCause = 0;
 
     const check = () => {
+      if (document.hidden) return;   // nobody is looking at the page; the tab-switch nudge covers this
       const video = videoRef.current;
       const stream = video?.srcObject as MediaStream | null;
       const cameraOn = !!stream?.getVideoTracks().some(track => track.enabled && track.readyState === 'live');
@@ -124,9 +130,9 @@ export function useAttentionMonitor(videoRef: RefObject<HTMLVideoElement | null>
       stopped = true;
       clearInterval(timer);
       try { landmarker?.close(); } catch (_) {}
-      setNudge(null);
+      setNudge(current => (current === NUDGES.leftTab ? current : null));
     };
-  }, [active, videoRef]);
+  }, [active, cameraOn, videoRef]);
 
   return nudge;
 }

@@ -1,3 +1,4 @@
+import { toast } from 'sonner';
 import { getToken, removeToken } from './auth';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
@@ -40,6 +41,14 @@ export interface CodingChallenge {
   runsLeft: number;
 }
 
+// One question from the interview, the candidate's answer, and the report's note on it
+export interface AnsweredQuestion {
+  order: number;
+  questionText: string;
+  userAnswer: string | null;
+  feedback: string | null;
+}
+
 export interface InterviewFeedback {
   totalScore: number;
   interviewScore: number;
@@ -55,19 +64,45 @@ export interface InterviewFeedback {
 export function expireSession() {
   if (typeof window === 'undefined') return;
   removeToken();
-  if (!window.location.pathname.startsWith('/sign-')) window.location.assign('/sign-in');
+  if (!window.location.pathname.startsWith('/sign-')) window.location.assign('/sign-in?expired=1');
 }
 
-async function request(path: string, options: { method?: string; body?: unknown } = {}) {
+// The backend runs on a free host that sleeps when idle; its first response can take up to a
+// minute. Calling this when a page opens means it is usually awake by the time it is needed.
+export function wakeBackend(): void {
+  fetch(`${API_BASE_URL}/health`).catch(() => {});
+}
+
+// Tells the user why nothing is happening when a normally quick request drags on
+export function warnIfSlow(): () => void {
+  const timer = setTimeout(() => {
+    toast.info('Waking up the server. After a quiet spell this can take up to a minute.', { id: 'server-waking', duration: 15000 });
+  }, 5000);
+  return () => {
+    clearTimeout(timer);
+    toast.dismiss('server-waking');
+  };
+}
+
+// `slow: true` marks requests that are expected to take a while (model calls), which have their own progress screens
+async function request(path: string, options: { method?: string; body?: unknown; slow?: boolean } = {}) {
   const token = getToken();
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    method: options.method || 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-    },
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
-  });
+  const done = options.slow ? () => {} : warnIfSlow();
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      method: options.method || 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      },
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    });
+  } catch {
+    throw new ApiError('Could not reach the server. Check your connection and try again.', 'NETWORK_ERROR', 0);
+  } finally {
+    done();
+  }
 
   const data = await response.json().catch(() => null);
   if (response.status === 401) expireSession();
@@ -86,9 +121,34 @@ export async function getQuota(): Promise<{ quota: Quota; active: { id: number }
   return request('/interviews/quota');
 }
 
-export async function createInterview(resumeURL: string, jobDescription: string = '', resumeText: string = ''): Promise<{ interview: { id: number }; quota: Quota }> {
-  // Pass resumeText to backend so it can skip PDF extraction if valid text is provided
-  return request('/interviews', { method: 'POST', body: { resumeURL, jobDescription, resumeText } });
+// Sends a resume PDF to the server and gets back the text in it. The file is not stored.
+export async function readResume(file: File): Promise<string> {
+  const token = getToken();
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/resumes/extract`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/pdf',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      },
+      body: file,
+    });
+  } catch {
+    throw new ApiError('Could not reach the server. Check your connection and try again.', 'NETWORK_ERROR', 0);
+  }
+
+  const data = await response.json().catch(() => null);
+  if (response.status === 401) expireSession();
+  if (!response.ok) {
+    throw new ApiError(data?.error || 'We could not read that file. Please try again.', data?.code || 'ERROR', response.status);
+  }
+  return data.text;
+}
+
+// resumeText is what was read from the uploaded PDF, or the details typed in by hand
+export async function createInterview(resumeText: string, jobDescription: string = '', level: string = ''): Promise<{ interview: { id: number }; quota: Quota }> {
+  return request('/interviews', { method: 'POST', body: { resumeText, jobDescription, level } });
 }
 
 export async function getInterviewHistory() {
@@ -101,18 +161,23 @@ export async function getInterviewDetail(interviewId: number) {
   return data.interview;
 }
 
+// Tells the server the conversation is over. Safe to call more than once.
+export async function endInterview(interviewId: number) {
+  return request(`/interviews/${interviewId}/end`, { method: 'POST' });
+}
+
 // ============================================
 // CODING ROUND (Protected)
 // ============================================
 
 // The interview's challenge; generated on first call, then always the same one
 export async function getCodingChallenge(interviewId: number): Promise<CodingChallenge> {
-  const data = await request(`/interviews/${interviewId}/coding/challenge`, { method: 'POST' });
+  const data = await request(`/interviews/${interviewId}/coding/challenge`, { method: 'POST', slow: true });
   return data.challenge;
 }
 
 export async function runCode(interviewId: number, code: string, language: string): Promise<CodingChallenge> {
-  const data = await request(`/interviews/${interviewId}/coding/run`, { method: 'POST', body: { code, language } });
+  const data = await request(`/interviews/${interviewId}/coding/run`, { method: 'POST', body: { code, language }, slow: true });
   return data.challenge;
 }
 
@@ -121,8 +186,11 @@ export async function submitCode(interviewId: number, code: string): Promise<Cod
   return data.challenge;
 }
 
-export async function skipCoding(interviewId: number) {
-  return request(`/interviews/${interviewId}/coding/skip`, { method: 'POST' });
+// Leaves the coding round out of the report. Without `discard`, code that was already handed
+// in is kept (declining the round up front must never erase earlier work); the Skip button
+// beside the editor passes it to set that code aside on purpose.
+export async function skipCoding(interviewId: number, discard: boolean = false) {
+  return request(`/interviews/${interviewId}/coding/skip`, { method: 'POST', body: { discard } });
 }
 
 // What the user thought of AeroPrep itself; saved and emailed to the team
@@ -135,7 +203,6 @@ export async function sendProductFeedback(rating: number, message: string, inter
 // ============================================
 
 // The interview's report; generated on first call, then read back from the database
-export async function getFeedback(interviewId: number): Promise<InterviewFeedback> {
-  const data = await request(`/interviews/${interviewId}/feedback`, { method: 'POST' });
-  return data.feedback;
+export async function getFeedback(interviewId: number): Promise<{ feedback: InterviewFeedback; questions: AnsweredQuestion[] }> {
+  return request(`/interviews/${interviewId}/feedback`, { method: 'POST', slow: true });
 }

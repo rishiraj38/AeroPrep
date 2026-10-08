@@ -66,7 +66,7 @@ export default function HelpPage() {
             </AccordionItem>
 
             <AccordionItem title="How does the scoring work?">
-              When the interview ends, an AI model reads the full transcript and your coding round and writes the report: scores, strengths, weaknesses and a hire or no-hire call. It is a practice tool, so treat the score as a guide rather than a verdict.
+              When the interview ends, an AI model reads the full transcript and your coding round and writes the report: scores, strengths, weaknesses and a hire or no-hire recommendation. It is a practice tool, so treat the score as a guide rather than a verdict.
             </AccordionItem>
 
             <AccordionItem title="How is my code checked?">
@@ -74,7 +74,11 @@ export default function HelpPage() {
             </AccordionItem>
 
             <AccordionItem title="What happens to my resume?">
-              Your PDF is stored with our file host, and its text is sent to our AI provider so the interviewer can ask about your experience. We use it only to run your interviews.
+We read the text out of your PDF and keep only that text; the file itself is not stored. The text is sent to our AI provider so the interviewer can ask about your experience, and is used only to run your interviews.
+            </AccordionItem>
+
+            <AccordionItem title="What does the camera do?">
+              The camera is optional. When it is on, your own browser watches the picture to remind you if you leave the frame, look away for several seconds or switch to another tab, the way an interviewer would notice. The video never leaves your device: nothing is recorded, uploaded or stored, and it does not affect your score.
             </AccordionItem>
 
             <AccordionItem title="Voice input is not working. What can I do?">

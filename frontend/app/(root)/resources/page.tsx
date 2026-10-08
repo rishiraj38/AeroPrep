@@ -1,6 +1,12 @@
 import React from 'react';
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ArrowUpRight, Building2, BookOpen, MessagesSquare, Network, Play } from 'lucide-react';
+
+export const metadata: Metadata = {
+  title: 'Interview prep library',
+  description: 'The best free material for interviews at Google, Amazon, Microsoft and other large tech companies: official hiring pages, recorded mock interviews, candidate experiences, coding practice and system design.',
+};
 
 // Each link was checked when this page was written. They point at the companies' own
 // hiring pages and at long-standing community material.
@@ -102,7 +108,7 @@ export default function ResourcesPage() {
           ))}
         </div>
 
-        <p className="mt-12 text-xs text-light-600">
+        <p className="mt-12 text-xs text-light-400">
           These are independent websites. AeroPrep is not affiliated with any of them or with the companies named.
         </p>
       </div>

@@ -8,7 +8,6 @@ import {
   LayoutDashboard, 
   BookOpen,
   History, 
-  Settings, 
   LogOut, 
   Play,
   Menu,
@@ -30,7 +29,8 @@ interface MobileNavProps {
 export const MobileNav = ({ user, isSnowing, toggleSnow }: MobileNavProps) => {
   const [isOpen, setIsOpen] = useState(false);
   const pathname = usePathname();
-  const isLocked = pathname.includes('/interview/session') || pathname.includes('/interview/coding');
+  // The coding round saves itself as you go, so only the live interview room locks navigation
+  const isLocked = pathname.includes('/interview/session');
 
   const handleLogout = () => {
     logout();
@@ -63,13 +63,6 @@ export const MobileNav = ({ user, isSnowing, toggleSnow }: MobileNavProps) => {
       active: pathname === "/resources",
     },
     {
-      label: "Settings",
-      icon: Settings,
-      href: "/settings",
-      active: pathname === "/settings",
-      disabled: true,
-    },
-    {
       label: "Help & Support",
       icon: HelpCircle,
       href: "/help",
@@ -90,7 +83,9 @@ export const MobileNav = ({ user, isSnowing, toggleSnow }: MobileNavProps) => {
             onClick={() => !isLocked && setIsOpen(!isOpen)} 
             disabled={isLocked}
             className={cn("text-white hover:bg-white/10", isLocked && "opacity-50 cursor-not-allowed")}
-            title={isLocked ? "Finish interview to navigate" : "Open Menu"}
+            title={isLocked ? "Finish interview to navigate" : (isOpen ? "Close menu" : "Open menu")}
+            aria-label={isOpen ? "Close menu" : "Open menu"}
+            aria-expanded={isOpen}
          >
             {isOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
          </Button>
@@ -98,19 +93,18 @@ export const MobileNav = ({ user, isSnowing, toggleSnow }: MobileNavProps) => {
 
       {/* Mobile Menu Overlay */}
       {isOpen && (
-        <div className="absolute top-16 left-0 right-0 bg-[#0a0a0f] border-b border-white/5 px-4 py-6 shadow-2xl animate-in slide-in-from-top-2 duration-200">
+        <div className="absolute top-16 left-0 right-0 max-h-[calc(100dvh-4rem)] overflow-y-auto bg-[#0a0a0f] border-b border-white/5 px-4 py-6 shadow-2xl animate-in slide-in-from-top-2 duration-200">
            <div className="flex flex-col space-y-2">
               {routes.map((route) => (
                 <Link
                   key={route.href}
-                  href={route.disabled ? "#" : route.href}
+                  href={route.href}
                   onClick={() => setIsOpen(false)}
                   className={cn(
                     "flex items-center px-4 py-3 rounded-xl transition-all duration-200 font-medium",
                     route.active 
                       ? "bg-primary-200/10 text-primary-200" 
-                      : "text-gray-400 hover:text-white hover:bg-white/5",
-                    route.disabled && "opacity-50 cursor-not-allowed"
+                      : "text-gray-400 hover:text-white hover:bg-white/5"
                   )}
                 >
                   <route.icon className={cn("h-5 w-5 mr-3", route.active ? "text-primary-200" : "text-gray-400")} />
@@ -142,7 +136,7 @@ export const MobileNav = ({ user, isSnowing, toggleSnow }: MobileNavProps) => {
                     </div>
                     <div>
                         <p className="text-sm font-medium text-white">{user?.name}</p>
-                        <p className="text-xs text-gray-500">{user?.email}</p>
+                        <p className="text-xs text-gray-400">{user?.email}</p>
                     </div>
                 </div>
                 <Button 

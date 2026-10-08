@@ -25,7 +25,7 @@ const STEPS = [
   {
     icon: ScrollText,
     title: "Read your report",
-    body: "A score, a hire or no-hire call, and the specific answers that helped or hurt you.",
+    body: "A score, a hire or no-hire recommendation, and the specific answers that helped or hurt you.",
   },
 ];
 
@@ -55,7 +55,8 @@ const FEATURES = [
 // A still of the interview room, drawn in markup so the page ships no video
 function InterviewPreview() {
   return (
-    <div className="rounded-2xl border border-white/10 bg-[#202124] shadow-2xl shadow-primary-200/10 overflow-hidden">
+    <div role="img" aria-label="Example of the interview room: Alex asks a follow-up question about the candidate's answer" className="rounded-2xl border border-white/10 bg-[#202124] shadow-2xl shadow-primary-200/10 overflow-hidden">
+      <div aria-hidden="true">
       <div className="grid sm:grid-cols-[1fr_1.1fr]">
         <div className="relative flex flex-col items-center justify-center gap-3 bg-[#2d2e30] px-6 py-10">
           <span className="absolute left-4 top-4 font-mono text-sm font-bold text-gray-300">12:41</span>
@@ -97,17 +98,20 @@ function InterviewPreview() {
           <PhoneOff className="h-4 w-4" />
         </span>
       </div>
+      </div>
     </div>
   );
 }
 
 function ReportPreview() {
   return (
-    <div className="rounded-2xl border border-white/10 bg-dark-200/70 p-6 sm:p-8">
+    <div role="img" aria-label="Example report: overall score 72 out of 100, recommendation Hire, with one strength and one thing to improve" className="rounded-2xl border border-white/10 bg-dark-200/70 p-6 sm:p-8">
+      <p className="mb-4 text-xs font-semibold uppercase tracking-widest text-light-400">Example report</p>
+      <div aria-hidden="true">
       <div className="flex flex-wrap items-end gap-6 border-b border-white/5 pb-6">
         <div>
           <p className="text-xs uppercase tracking-widest text-light-400">Overall score</p>
-          <p className="text-5xl font-bold text-white">72<span className="text-xl text-light-600">/100</span></p>
+          <p className="text-5xl font-bold text-white">72<span className="text-xl text-light-400">/100</span></p>
         </div>
         <span className="rounded-lg border border-primary-200/30 bg-primary-200/15 px-3 py-1.5 text-sm font-semibold text-primary-100">Hire</span>
         <div className="ml-auto flex gap-6 text-sm">
@@ -133,6 +137,7 @@ function ReportPreview() {
           </p>
         </div>
       </div>
+      </div>
     </div>
   );
 }
@@ -144,11 +149,11 @@ export function LandingHero() {
 
       <header className="relative z-10 mx-auto flex w-full max-w-6xl items-center justify-between px-6 py-6">
         <Link href="/" className="flex items-center gap-2">
-          <Image src="/ap.png" alt="" width={36} height={36} className="object-contain" priority />
+          <Image src="/ap.png" alt="" width={54} height={36} priority />
           <span className="text-xl font-bold">AeroPrep</span>
         </Link>
         <nav className="flex items-center gap-2 sm:gap-4">
-          <Link href="/resources" className="hidden px-3 py-2 text-sm font-medium text-light-400 transition-colors hover:text-white sm:block">
+          <Link href="/resources" className="px-2 py-2 text-sm font-medium text-light-400 transition-colors hover:text-white sm:px-3">
             Prep library
           </Link>
           <Link href="/sign-in" className="px-3 py-2 text-sm font-medium text-light-400 transition-colors hover:text-white">
@@ -240,7 +245,7 @@ export function LandingHero() {
           <div className="card-cta flex flex-col items-start gap-6 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2 className="text-2xl font-bold sm:text-3xl">Your first three interviews are free.</h2>
-              <p className="mt-2 text-light-100/80">Create an account and be in the interview room in under a minute.</p>
+              <p className="mt-2 text-light-100/80">Create an account and start your first interview straight away.</p>
             </div>
             <Link href="/sign-up" className="inline-flex h-12 shrink-0 items-center gap-2 rounded-lg bg-white px-7 text-base font-semibold text-primary-300 transition-colors hover:bg-primary-100">
               Start a free interview <ArrowRight className="h-4 w-4" />

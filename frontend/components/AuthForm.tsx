@@ -10,11 +10,12 @@ import { AlertCircle, Loader2 } from "lucide-react";
 import FormField from "./FormField";
 import { useRouter } from "next/navigation";
 import { isAuthenticated, login, register } from "@/lib/auth";
+import { wakeBackend, warnIfSlow } from "@/lib/api";
 import Image from "next/image";
 
 const authFormSchema = (type: FormType) => {
   return z.object({
-    name: type === "sign-up" ? z.string().min(3, "Name must be at least 3 characters") : z.string().optional(),
+    name: type === "sign-up" ? z.string().trim().min(2, "Please enter your name") : z.string().optional(),
     email: z.string().email("Please enter a valid email"),
     password: z.string().min(6, "Password must be at least 6 characters"),
   });
@@ -36,14 +37,21 @@ const AuthForm = ({ type }: { type: FormType }) => {
     },
   });
 
-  // Someone who is already signed in has no use for this page
+  // Someone who is already signed in has no use for this page. Everyone else is about to
+  // need the server, so start waking it while they type.
   useEffect(() => {
     if (isAuthenticated()) router.replace('/');
+    else wakeBackend();
+    // Sent here because the login stopped being valid: say so, or it looks like a random sign-out
+    if (new URLSearchParams(window.location.search).has('expired')) {
+      setError('Your session has expired. Please sign in again.');
+    }
   }, [router]);
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
     setIsLoading(true);
     setError("");
+    const done = warnIfSlow();
     try {
       if (type === "sign-up") {
         // Creating an account signs the user straight in
@@ -59,6 +67,8 @@ const AuthForm = ({ type }: { type: FormType }) => {
       console.error(error);
       setError(error.message || "An error occurred");
       setIsLoading(false);
+    } finally {
+      done();
     }
   }
 
@@ -67,7 +77,7 @@ const AuthForm = ({ type }: { type: FormType }) => {
   return (
     <div className="flex flex-col gap-6 rounded-2xl border border-white/10 bg-dark-200/70 backdrop-blur-sm px-6 py-10 sm:px-10 shadow-2xl shadow-black/40">
       <div className="flex flex-col gap-3 items-center text-center">
-        <Image src="/ap.png" alt="AeroPrep" width={72} height={72} className="object-contain mb-1" priority />
+        <Image src="/ap.png" alt="AeroPrep" width={108} height={72} className="mb-1" priority />
         <h1 className="text-2xl font-bold text-white tracking-tight">
           {isSign ? "Welcome back" : "Create your account"}
         </h1>
@@ -107,6 +117,7 @@ const AuthForm = ({ type }: { type: FormType }) => {
             placeholder="Enter Your Password"
             type="password"
             autoComplete={isSign ? "current-password" : "new-password"}
+            hint={isSign ? undefined : "At least 6 characters"}
           />
 
           {error && (
@@ -118,7 +129,7 @@ const AuthForm = ({ type }: { type: FormType }) => {
 
           <button className="btn-primary w-full h-11 cursor-pointer" type="submit" disabled={isLoading}>
             {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
-            {isSign ? "Sign in" : "Create an Account"}
+            {isLoading ? (isSign ? "Signing in…" : "Creating your account…") : (isSign ? "Sign in" : "Create an Account")}
           </button>
         </form>
       </Form>

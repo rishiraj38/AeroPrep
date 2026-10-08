@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, useCallback } from 'react';
-import { getFeedback, ApiError, InterviewFeedback } from '@/lib/api';
+import { getFeedback, ApiError, InterviewFeedback, AnsweredQuestion } from '@/lib/api';
 import { isAuthenticated } from '@/lib/auth';
 import { getCurrentInterviewId, clearCurrentInterview } from '@/lib/currentInterview';
 import { Button } from '@/components/ui/button';
@@ -13,6 +13,7 @@ import ProductFeedback from '@/components/ProductFeedback';
 export default function FeedbackPage() {
   const router = useRouter();
   const [feedback, setFeedback] = useState<InterviewFeedback | null>(null);
+  const [questions, setQuestions] = useState<AnsweredQuestion[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [inProgress, setInProgress] = useState(false);
@@ -26,7 +27,9 @@ export default function FeedbackPage() {
     setLoading(true);
     setError('');
     try {
-      setFeedback(await getFeedback(interviewId));
+      const report = await getFeedback(interviewId);
+      setFeedback(report.feedback);
+      setQuestions(report.questions.filter(question => question.feedback));
     } catch (err: any) {
       console.error("Failed to load feedback", err);
       setInProgress(err instanceof ApiError && err.code === 'INTERVIEW_IN_PROGRESS');
@@ -58,7 +61,7 @@ export default function FeedbackPage() {
             <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-primary-200 mb-6"></div>
             <Target className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-[130%] text-primary-200 h-6 w-6 animate-pulse" />
         </div>
-        <h2 className="text-xl text-white font-bold tracking-wide">ANALYZING INTERVIEW</h2>
+        <h2 className="text-xl text-white font-bold tracking-wide">Writing your report</h2>
         <p className="text-sm text-light-400 mt-2 max-w-md animate-pulse">Analyzing your interview... (This may take 20-30s)</p>
         
         <div className="mt-8 p-4 bg-primary-200/10 border border-primary-200/30 rounded-lg max-w-sm">
@@ -109,28 +112,28 @@ export default function FeedbackPage() {
                    <div className="h-8 w-8 rounded-full bg-primary-200 flex items-center justify-center text-white">
                         <CheckCircle className="h-5 w-5" />
                    </div>
-                   <h2 className="text-light-400 font-bold uppercase tracking-widest text-xs">Interview Feedback</h2>
+                   <h2 className="text-white/90 font-bold uppercase tracking-widest text-xs">Interview report</h2>
                </div>
                
-               <h1 className="text-4xl font-bold text-white mb-6">Analysis Complete</h1>
+               <h1 className="text-4xl font-bold text-white mb-6">Your report</h1>
                
                <div className="flex flex-wrap gap-8 items-end">
                    <div>
-                       <p className="text-light-400 text-sm mb-1">Overall Score</p>
-                       <div className="text-5xl font-bold text-white">{feedback.totalScore}<span className="text-2xl text-light-600">/100</span></div>
+                       <p className="text-white/90 text-sm mb-1">Overall score</p>
+                       <div className="text-5xl font-bold text-white">{feedback.totalScore}<span className="text-2xl text-white/80">/100</span></div>
                    </div>
                    
                    <div className="h-12 w-[1px] bg-white/10 hidden sm:block"></div>
                    
                    <div>
-                       <p className="text-light-400 text-sm mb-1">Status</p>
+                       <p className="text-white/90 text-sm mb-1">Recommendation</p>
                        <div className="text-xl font-bold text-primary-100 bg-primary-200/20 px-4 py-2 rounded-lg border border-primary-200/30">
                            {feedback.recommendation}
                        </div>
                    </div>
                    
-                    <div className="ml-auto flex items-center gap-2 text-success-200 text-sm bg-success-200/10 px-3 py-1.5 rounded-full border border-success-200/20">
-                        <CheckCircle className="h-3 w-3" /> Interview Saved
+                    <div className="ml-auto flex items-center gap-2 text-white text-sm bg-black/25 px-3 py-1.5 rounded-full border border-white/20">
+                        <CheckCircle className="h-3 w-3" /> Saved to your history
                     </div>
                </div>
            </div>
@@ -142,12 +145,12 @@ export default function FeedbackPage() {
           <div className="card p-6 border-l-4 border-l-primary-200">
               <div className="flex justify-between items-start mb-4">
                   <div>
-                      <h3 className="text-lg font-bold text-white">Communication Skills</h3>
-                      <p className="text-xs text-light-400">Verbal & Technical Articulation</p>
+                      <h3 className="text-lg font-bold text-white">Interview score</h3>
+                      <p className="text-xs text-light-400">How you answered the interviewer&apos;s questions</p>
                   </div>
                   <Target className="h-6 w-6 text-primary-200" />
               </div>
-              <div className="text-4xl font-bold text-white mb-2">{feedback.interviewScore}%</div>
+              <div className="text-4xl font-bold text-white mb-2">{feedback.interviewScore}<span className="text-xl text-light-400">/100</span></div>
               <div className="w-full bg-dark-300 h-2 rounded-full overflow-hidden">
                  <div className="bg-primary-200 h-full" style={{ width: `${feedback.interviewScore}%` }}></div>
               </div>
@@ -157,12 +160,12 @@ export default function FeedbackPage() {
           <div className="card p-6 border-l-4 border-l-primary-300">
                <div className="flex justify-between items-start mb-4">
                   <div>
-                      <h3 className="text-lg font-bold text-white">Technical Skills</h3>
-                      <p className="text-xs text-light-400">Code Quality & Efficiency</p>
+                      <h3 className="text-lg font-bold text-white">Coding score</h3>
+                      <p className="text-xs text-light-400">The coding round, as reviewed by the AI</p>
                   </div>
                   <Target className="h-6 w-6 text-primary-300" />
               </div>
-              <div className="text-4xl font-bold text-white mb-2">{feedback.codingScore}%</div>
+              <div className="text-4xl font-bold text-white mb-2">{feedback.codingScore}<span className="text-xl text-light-400">/100</span></div>
               <div className="w-full bg-dark-300 h-2 rounded-full overflow-hidden">
                  <div className="bg-primary-300 h-full" style={{ width: `${feedback.codingScore}%` }}></div>
               </div>
@@ -201,6 +204,26 @@ export default function FeedbackPage() {
                </ul>
            </div>
         </div>
+
+        {/* Question by question */}
+        {questions.length > 0 && (
+          <div className="card p-8">
+            <h3 className="font-bold text-white mb-1 flex items-center gap-2">
+              <Target className="h-5 w-5 text-primary-200" />
+              Question by question
+            </h3>
+            <p className="text-sm text-light-400 mb-6">What worked in each answer, and what a stronger one would add.</p>
+            <ol className="space-y-6">
+              {questions.map((question) => (
+                <li key={question.order} className="border-l-2 border-primary-200/40 pl-4">
+                  <p className="text-sm font-medium text-white">{question.questionText}</p>
+                  <p className="mt-2 text-sm text-light-400"><span className="text-light-600">You said: </span>{question.userAnswer}</p>
+                  <p className="mt-2 text-sm text-light-100 bg-dark-300/30 border border-white/5 rounded-lg p-3">{question.feedback}</p>
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
 
         {/* Detailed Feedback */}
         <div className="card p-8">

@@ -17,64 +17,31 @@ const ROLE_DESCRIPTIONS: Record<string, string> = {
   'Full Stack Developer': 'Looking for a Full Stack Developer capable of handling both frontend (React) and backend (Node.js) development. You should be familiar with the entire web development lifecycle.'
 };
 
-const useTypingEffect = (texts: string[], typingSpeed = 100, deletingSpeed = 50, pauseTime = 2000) => {
-  const [displayText, setDisplayText] = useState('');
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [isDeleting, setIsDeleting] = useState(false);
-
-  useEffect(() => {
-    const handleTyping = () => {
-      const currentFullText = texts[currentIndex];
-      
-      if (isDeleting) {
-        setDisplayText(currentFullText.substring(0, displayText.length - 1));
-        if (displayText.length === 0) {
-          setIsDeleting(false);
-          setCurrentIndex((prev) => (prev + 1) % texts.length);
-        }
-      } else {
-        setDisplayText(currentFullText.substring(0, displayText.length + 1));
-        if (displayText.length === currentFullText.length) {
-          setTimeout(() => setIsDeleting(true), pauseTime);
-          return;
-        }
-      }
-    };
-
-    const timer = setTimeout(handleTyping, isDeleting ? deletingSpeed : typingSpeed);
-    return () => clearTimeout(timer);
-  }, [displayText, isDeleting, currentIndex, texts, typingSpeed, deletingSpeed, pauseTime]);
-
-  return displayText;
-};
+// How hard the interviewer pitches its questions; "" lets it judge from the resume
+const LEVELS = [
+  { value: '', label: 'Match my resume' },
+  { value: 'intern', label: 'Student or intern' },
+  { value: 'junior', label: 'Entry level (0 to 2 years)' },
+  { value: 'mid', label: 'Mid level (2 to 5 years)' },
+  { value: 'senior', label: 'Senior (5+ years)' },
+];
 
 function CreateInterviewContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const roleParam = searchParams.get('role');
   
-  const placeholderText = useTypingEffect([
-    "e.g. Senior React Developer",
-    "Frontend Developer",
-    "Backend Engineer (Node.js)",
-    "Full Stack Developer",
-    "DevOps Engineer",
-    "iOS Developer",
-    "Machine Learning Engineer",
-    "Product Manager",
-    "Data Scientist"
-  ]);
-
   const [mode, setMode] = useState<'upload' | 'manual'>('upload');
 
-  // Unified State
-  const [resumeURL, setResumeURL] = useState('');
+  // Text read from the uploaded resume
+  const [resumeText, setResumeText] = useState('');
   
   // Manual Details
   const [manualRole, setManualRole] = useState('');
 
   const [manualDesc, setManualDesc] = useState('');
   const [manualTech, setManualTech] = useState('');
+  const [level, setLevel] = useState('');
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -121,7 +88,7 @@ function CreateInterviewContent() {
     if (loading) return;
 
     // Validation
-    if (mode === 'upload' && !resumeURL) {
+    if (mode === 'upload' && !resumeText) {
         setError("Please upload a resume PDF to continue.");
         return;
     }
@@ -143,7 +110,7 @@ Tech Stack: ${manualTech || "Not specified"}.`
 
       // The server stores the resume and job description with the interview;
       // the browser only needs to remember which interview it is on.
-      const data = await createInterview(mode === 'upload' ? resumeURL : "", manualDesc, practiceResumeText);
+      const data = await createInterview(mode === 'upload' ? resumeText : practiceResumeText, manualDesc, level);
       setCurrentInterviewId(data.interview.id);
 
       router.push('/interview/session');
@@ -195,19 +162,23 @@ Tech Stack: ${manualTech || "Not specified"}.`
         )}
         
         {/* Mode Tabs */}
-        <div className="grid grid-cols-2 gap-2 p-1 bg-muted rounded-lg mb-8">
+        <div role="tablist" aria-label="How to describe yourself" className="grid grid-cols-2 gap-2 p-1 bg-muted rounded-lg mb-8">
             <button 
+                role="tab"
+                aria-selected={mode === 'upload'}
                 onClick={() => setMode('upload')}
                 className={`flex items-center justify-center gap-2 py-2.5 text-sm font-medium rounded-md transition-all ${
-                    mode === 'upload' ? 'bg-background shadow-sm text-foreground cursor-pointer' : 'text-muted-foreground hover:bg-background/50 cursor-pointer'
+                    mode === 'upload' ? 'bg-primary text-primary-foreground shadow-sm cursor-pointer' : 'text-muted-foreground hover:bg-background/50 cursor-pointer'
                 }`}
             >
                 <FileText className="h-4 w-4" /> Upload Resume
             </button>
             <button 
+                role="tab"
+                aria-selected={mode === 'manual'}
                 onClick={() => setMode('manual')}
                 className={`flex items-center justify-center gap-2 py-2.5 text-sm font-medium rounded-md transition-all ${
-                    mode === 'manual' ? 'bg-background shadow-sm text-foreground cursor-pointer' : 'text-muted-foreground hover:bg-background/50 cursor-pointer'
+                    mode === 'manual' ? 'bg-primary text-primary-foreground shadow-sm cursor-pointer' : 'text-muted-foreground hover:bg-background/50 cursor-pointer'
                 }`}
             >
                 <Type className="h-4 w-4" /> Manually Enter Details
@@ -225,21 +196,23 @@ Tech Stack: ${manualTech || "Not specified"}.`
                     </div>
 
                     <ResumeUploader 
-                        onUploadSuccess={(url) => setResumeURL(url)} 
+                        onUploadStart={() => setResumeText('')}
+                        onUploadSuccess={(text) => setResumeText(text)} 
                         className="py-4"
                     />
                     
-                    {resumeURL && (
+                    {resumeText && (
                        <div className="p-3 bg-green-500/10 text-green-600 border border-green-500/20 rounded text-center text-sm font-medium">
                           Resume ready for analysis!
                        </div>
                     )}
 
                     <div className="pt-4">
-                        <label className="block text-sm font-medium mb-2">Job Description (Optional)</label>
+                        <label htmlFor="job-description" className="block text-sm font-medium mb-2">Job Description (Optional)</label>
                         <textarea
+                          id="job-description"
                           disabled={loading}
-                          className="w-full p-3 border rounded-lg bg-background min-h-[100px] text-sm"
+                          className="w-full p-3 border border-input rounded-lg bg-background min-h-[100px] text-sm"
                           placeholder="Paste the job description if applying for a specific role..."
                           value={manualDesc}
                           onChange={(e) => setManualDesc(e.target.value)}
@@ -256,22 +229,24 @@ Tech Stack: ${manualTech || "Not specified"}.`
                     </div>
 
                     <div>
-                        <label className="block text-sm font-medium mb-1">Target Job Role <span className="text-red-500">*</span></label>
+                        <label htmlFor="role" className="block text-sm font-medium mb-1">Target Job Role <span className="text-red-400">(required)</span></label>
                         <input
+                          id="role"
                           type="text"
                           required
-                          className="w-full p-3 border rounded-lg bg-background"
-                          placeholder={placeholderText}
+                          className="w-full p-3 border border-input rounded-lg bg-background"
+                          placeholder="e.g. Frontend Developer"
                           value={manualRole}
                           onChange={(e) => setManualRole(e.target.value)}
                         />
                     </div>
 
                     <div>
-                        <label className="block text-sm font-medium mb-1">Tech Stack (comma separated)</label>
+                        <label htmlFor="tech-stack" className="block text-sm font-medium mb-1">Tech Stack (comma separated)</label>
                         <input
+                          id="tech-stack"
                           type="text"
-                          className="w-full p-3 border rounded-lg bg-background"
+                          className="w-full p-3 border border-input rounded-lg bg-background"
                           placeholder="e.g. React, Node.js, AWS, PostgreSQL"
                           value={manualTech}
                           onChange={(e) => setManualTech(e.target.value)}
@@ -279,10 +254,11 @@ Tech Stack: ${manualTech || "Not specified"}.`
                     </div>
 
                     <div>
-                        <label className="block text-sm font-medium mb-1">Job Description or Key Requirements <span className="text-red-500">*</span></label>
+                        <label htmlFor="requirements" className="block text-sm font-medium mb-1">Job Description or Key Requirements <span className="text-red-400">(required)</span></label>
                         <textarea
+                          id="requirements"
                           required
-                          className="w-full p-3 border rounded-lg bg-background min-h-[120px]"
+                          className="w-full p-3 border border-input rounded-lg bg-background min-h-[120px]"
                           placeholder="Paste the full job description or list key requirements..."
                           value={manualDesc}
                           onChange={(e) => setManualDesc(e.target.value)}
@@ -291,8 +267,24 @@ Tech Stack: ${manualTech || "Not specified"}.`
                 </div>
             )}
 
+            <div className="mt-6">
+              <label htmlFor="level" className="block text-sm font-medium mb-1">Experience level</label>
+              <select
+                id="level"
+                value={level}
+                onChange={(e) => setLevel(e.target.value)}
+                disabled={loading}
+                className="w-full p-3 border border-input rounded-lg bg-background text-sm cursor-pointer"
+              >
+                {LEVELS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-muted-foreground">Sets how hard the questions and the coding challenge are.</p>
+            </div>
+
             {error && (
-              <div className="mt-6 p-3 bg-red-100 dark:bg-red-900/20 border border-red-300 dark:border-red-700 text-red-700 dark:text-red-400 rounded-md text-sm flex items-center gap-2">
+              <div role="alert" className="mt-6 p-3 bg-red-100 dark:bg-red-900/20 border border-red-300 dark:border-red-700 text-red-700 dark:text-red-400 rounded-md text-sm flex items-center gap-2">
                 <AlertTriangle className="h-4 w-4" />
                 {error}
               </div>
@@ -300,7 +292,7 @@ Tech Stack: ${manualTech || "Not specified"}.`
 
             <Button 
               onClick={() => handleSubmit()} 
-              disabled={loading || outOfInterviews || (mode === 'upload' && !resumeURL)}
+              disabled={loading || outOfInterviews || (mode === 'upload' && !resumeText)}
               className="w-full btn-primary cursor-pointer py-6 text-base sm:text-lg mt-6"
             >
               {loading ? (

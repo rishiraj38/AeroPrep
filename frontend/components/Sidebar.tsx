@@ -8,7 +8,6 @@ import {
   LayoutDashboard, 
   BookOpen,
   History, 
-  Settings, 
   LogOut, 
   Play,
   User,
@@ -33,14 +32,10 @@ export const Sidebar = ({ user, isSnowing, toggleSnow }: SidebarProps) => {
   const [isCollapsed, setIsCollapsed] = useState(false);
   
   // Determine if the user is currently in an active interview session
-  const isLocked = pathname.includes('/interview/session') || pathname.includes('/interview/coding');
+  // The coding round saves itself as you go, so only the live interview room locks navigation
+  const isLocked = pathname.includes('/interview/session');
 
   const handleLogout = () => {
-    if (isLocked) {
-      // Optionally, show a toast or alert that they need to finish the interview first
-      console.log("Cannot log out during an active interview session.");
-      return;
-    }
     logout();
     window.location.href = "/";
   };
@@ -70,13 +65,6 @@ export const Sidebar = ({ user, isSnowing, toggleSnow }: SidebarProps) => {
       href: "/resources",
       active: pathname === "/resources",
     },
-    {
-      label: "Settings",
-      icon: Settings,
-      href: "/settings",
-      active: pathname === "/settings",
-      disabled: true,
-    },
   ];
 
   return (
@@ -95,6 +83,7 @@ export const Sidebar = ({ user, isSnowing, toggleSnow }: SidebarProps) => {
           isLocked ? "cursor-not-allowed bg-gray-600 hover:bg-gray-600" : "hover:bg-primary-300 cursor-pointer"
         )}
         title={isLocked ? "Finish interview to navigate" : "Toggle Sidebar"}
+        aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
       >
         {isCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
       </button>
@@ -124,7 +113,7 @@ export const Sidebar = ({ user, isSnowing, toggleSnow }: SidebarProps) => {
         <div className="space-y-2">
           {routes.map((route) => {
             const isStartInterview = route.label === "Start Interview" && !route.active;
-            const isDisabled = route.disabled || isLocked;
+            const isDisabled = isLocked;
             
             return (
             <Link
@@ -167,7 +156,7 @@ export const Sidebar = ({ user, isSnowing, toggleSnow }: SidebarProps) => {
 
         {/* Helper Link */}
         <div className={cn("pb-2", isCollapsed ? "flex justify-center" : "px-2")}>
-           <Link href="/help" className={cn("flex items-center py-3 text-sm text-gray-500 hover:text-white transition-colors", isCollapsed ? "justify-center" : "px-4")}>
+           <Link href="/help" aria-label="Help & Support" className={cn("flex items-center py-3 text-sm text-gray-400 hover:text-white transition-colors", isCollapsed ? "justify-center" : "px-4")}>
               <HelpCircle className={cn(isCollapsed ? "h-5 w-5 ml-0.5" : "h-4 w-4 mr-3")} />
               {!isCollapsed && <span className="whitespace-nowrap">Help & Support</span>}
            </Link>
@@ -198,7 +187,7 @@ export const Sidebar = ({ user, isSnowing, toggleSnow }: SidebarProps) => {
                 {!isCollapsed && (
                   <div className="overflow-hidden">
                       <p className="text-sm font-semibold text-white truncate">{user?.name}</p>
-                      <p className="text-[11px] text-gray-500 truncate">{user?.email}</p>
+                      <p className="text-xs text-gray-400 truncate">{user?.email}</p>
                   </div>
                 )}
             </div>
@@ -207,6 +196,7 @@ export const Sidebar = ({ user, isSnowing, toggleSnow }: SidebarProps) => {
               variant="ghost" 
               className={cn("w-full text-gray-400 hover:text-red-400 hover:bg-red-500/10 h-9 transition-all cursor-pointer", isCollapsed ? "px-0 justify-center" : "justify-start px-2")}
               title="Sign Out"
+              aria-label="Sign Out"
             >
               <LogOut className={cn(isCollapsed ? "h-5 w-5" : "h-4 w-4 mr-2")} />
               {!isCollapsed && "Sign Out"}

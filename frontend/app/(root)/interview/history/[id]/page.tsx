@@ -13,6 +13,7 @@ interface Question {
   questionText: string;
   expectedAnswer: string;
   userAnswer: string | null;
+  feedback: string | null;
   order: number;
 }
 
@@ -78,18 +79,20 @@ export default function InterviewDetailPage() {
     fetchInterview();
   }, [interviewId]);
 
-  // Interviews without a report can be picked back up: the conversation if it is still
-  // open, otherwise the feedback step
+  // Interviews without a report can be picked back up. The interview room works out where
+  // they were: mid-conversation, or at the choice between the coding round and the report.
+  // One whose coding round was already handed in has nothing left to choose: it goes to its report.
   const continueInterview = () => {
     if (!interview) return;
     setCurrentInterviewId(interview.id);
-    router.push(interview.endedAt ? '/interview/feedback' : '/interview/session');
+    const codingDone = !!interview.endedAt && !!interview.codingChallenge?.userCode && !interview.codingChallenge.skipped;
+    router.push(codingDone ? '/interview/feedback' : '/interview/session');
   };
 
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
+        <div role="status" aria-label="Loading" className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-200"></div>
       </div>
     );
   }
@@ -110,7 +113,7 @@ export default function InterviewDetailPage() {
       <div className="max-w-5xl mx-auto">
         {/* Header */}
         <div className="mb-8">
-          <Link href="/interview/history" className="text-primary hover:underline mb-4 inline-block">
+          <Link href="/interview/history" className="text-primary-200 hover:underline mb-4 inline-block">
             ← Back to History
           </Link>
           <div className="flex justify-between items-start">
@@ -128,7 +131,7 @@ export default function InterviewDetailPage() {
             </div>
             {!interview.feedback && (
               <Button onClick={continueInterview} className="cursor-pointer">
-                {interview.endedAt ? 'Get Feedback' : 'Resume Interview'}
+                {interview.endedAt ? 'Continue to report' : 'Resume Interview'}
               </Button>
             )}
             {interview.feedback && (
@@ -148,12 +151,14 @@ export default function InterviewDetailPage() {
         </div>
 
         {/* Tabs */}
-        <div className="flex gap-2 mb-6 border-b">
+        <div role="tablist" className="flex gap-2 mb-6 border-b">
           <button 
             onClick={() => setActiveTab('questions')}
+            aria-selected={activeTab === 'questions'}
+            role="tab"
             className={`px-4 py-2 font-medium border-b-2 transition-colors ${
               activeTab === 'questions' 
-                ? 'border-primary text-primary' 
+                ? 'border-primary-200 text-primary-200' 
                 : 'border-transparent text-muted-foreground hover:text-foreground'
             }`}
           >
@@ -161,9 +166,11 @@ export default function InterviewDetailPage() {
           </button>
           <button 
             onClick={() => setActiveTab('coding')}
+            aria-selected={activeTab === 'coding'}
+            role="tab"
             className={`px-4 py-2 font-medium border-b-2 transition-colors ${
               activeTab === 'coding' 
-                ? 'border-primary text-primary' 
+                ? 'border-primary-200 text-primary-200' 
                 : 'border-transparent text-muted-foreground hover:text-foreground'
             }`}
           >
@@ -171,9 +178,11 @@ export default function InterviewDetailPage() {
           </button>
           <button 
             onClick={() => setActiveTab('feedback')}
+            aria-selected={activeTab === 'feedback'}
+            role="tab"
             className={`px-4 py-2 font-medium border-b-2 transition-colors ${
               activeTab === 'feedback' 
-                ? 'border-primary text-primary' 
+                ? 'border-primary-200 text-primary-200' 
                 : 'border-transparent text-muted-foreground hover:text-foreground'
             }`}
           >
@@ -200,10 +209,15 @@ export default function InterviewDetailPage() {
                     <h4 className="text-sm font-medium text-muted-foreground mb-2">Your Answer</h4>
                     <p className="text-sm">{q.userAnswer || <span className="italic text-muted-foreground">No answer provided</span>}</p>
                   </div>
-                  <div className="bg-green-500/10 rounded-lg p-4">
-                    <h4 className="text-sm font-medium text-green-600 dark:text-green-400 mb-2">Expected Answer</h4>
-                    <p className="text-sm">{q.expectedAnswer}</p>
-                  </div>
+                  {/* The report's note on this answer; older interviews stored an expected answer instead */}
+                  {(q.feedback || !q.expectedAnswer.startsWith('Evaluated dynamically')) && (
+                    <div className="bg-green-500/10 rounded-lg p-4">
+                      <h4 className="text-sm font-medium text-green-600 dark:text-green-400 mb-2">
+                        {q.feedback ? 'Feedback on this answer' : 'Expected Answer'}
+                      </h4>
+                      <p className="text-sm">{q.feedback || q.expectedAnswer}</p>
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
@@ -226,11 +240,11 @@ export default function InterviewDetailPage() {
                   <div className="flex items-center gap-4 mb-4">
                     <span className="px-2 py-1 bg-muted rounded text-xs">{interview.codingChallenge.language}</span>
                     <span className={`px-2 py-1 rounded text-xs ${
-                      interview.codingChallenge.passed 
-                        ? 'bg-green-500/20 text-green-400' 
-                        : 'bg-red-500/20 text-red-400'
+                      interview.codingChallenge.passed === null ? 'bg-muted text-muted-foreground'
+                        : interview.codingChallenge.passed ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
                     }`}>
-                      {interview.codingChallenge.passed ? 'Passed' : 'Failed'}
+                      {interview.codingChallenge.passed === null ? 'Not checked'
+                        : interview.codingChallenge.passed ? 'AI review: no problems found' : 'AI review: problems found'}
                     </span>
                   </div>
                   
@@ -265,15 +279,15 @@ export default function InterviewDetailPage() {
                 <div className="grid md:grid-cols-3 gap-4">
                   <div className="bg-card border rounded-lg p-6 text-center">
                     <div className="text-3xl font-bold text-primary">{interview.feedback.totalScore}</div>
-                    <div className="text-sm text-muted-foreground">Overall Score</div>
+                    <div className="text-sm text-muted-foreground">Overall score</div>
                   </div>
                   <div className="bg-card border rounded-lg p-6 text-center">
                     <div className="text-3xl font-bold text-blue-500">{interview.feedback.interviewScore}</div>
-                    <div className="text-sm text-muted-foreground">Interview Score</div>
+                    <div className="text-sm text-muted-foreground">Interview score</div>
                   </div>
                   <div className="bg-card border rounded-lg p-6 text-center">
                     <div className="text-3xl font-bold text-purple-500">{interview.feedback.codingScore}</div>
-                    <div className="text-sm text-muted-foreground">Coding Score</div>
+                    <div className="text-sm text-muted-foreground">Coding score</div>
                   </div>
                 </div>
 
