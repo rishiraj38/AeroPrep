@@ -6,10 +6,11 @@ import { useRouter } from 'next/navigation';
 import { getToken, removeToken } from '@/lib/auth';
 import { skipCoding } from '@/lib/api';
 import { getCurrentInterviewId, clearCurrentInterview } from '@/lib/currentInterview';
+import { useAttentionMonitor } from '@/lib/useAttentionMonitor';
 import { io, Socket } from 'socket.io-client';
 import {
   Mic, MicOff, Video, VideoOff, PhoneOff,
-  Loader2, Code2, CheckCircle, SkipForward, Play
+  Loader2, Code2, CheckCircle, SkipForward, Play, Eye, RotateCcw
 } from 'lucide-react';
 
 // ─── Config ──────────────────────────────────────────────────────────────────
@@ -87,6 +88,7 @@ export default function InterviewSessionPage() {
   // hardware
   const [micEnabled, setMicEnabled] = useState(true);
   const [camEnabled, setCamEnabled] = useState(true);
+  const [camPromptDismissed, setCamPromptDismissed] = useState(false);
   const micEnabledRef = useRef(true);
 
   // post-interview
@@ -483,6 +485,21 @@ export default function InterviewSessionPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Turn the camera on. It is optional: the interview carries on without it
+  const startCamera = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      streamRef.current = stream;
+      if (videoRef.current) videoRef.current.srcObject = stream;
+      setCamEnabled(true);
+      setCamPromptDismissed(true);
+      return true;
+    } catch {
+      setCamEnabled(false);
+      return false;
+    }
+  };
+
   // Enter the room. Runs from a click, which is what lets the browser speak and listen.
   const enterCall = async () => {
     const latest = transcript[transcript.length - 1];
@@ -494,11 +511,7 @@ export default function InterviewSessionPage() {
     goToPhase('active');
     lastActivityRef.current = Date.now();
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      streamRef.current = stream;
-      if (videoRef.current) videoRef.current.srcObject = stream;
-    } catch { setCamEnabled(false); }
+    await startCamera();
 
     // Alex opens with the greeting, or repeats the question the candidate was on
     presentedRef.current = transcript.length;
@@ -516,9 +529,28 @@ export default function InterviewSessionPage() {
   };
 
   const toggleCam = () => {
-    streamRef.current?.getVideoTracks().forEach(t => { t.enabled = !camEnabled; });
+    // No camera yet (it was blocked or declined earlier): ask for it now
+    if (!streamRef.current) { startCamera(); return; }
+    streamRef.current.getVideoTracks().forEach(t => { t.enabled = !camEnabled; });
     setCamEnabled(c => !c);
   };
+
+  // Stop Alex mid-sentence and go straight to answering, as you could with a person
+  const interruptAlex = () => { synthRef.current?.cancel(); };
+
+  // Hear the last thing Alex said again; costs nothing, it is the stored text
+  const repeatQuestion = () => {
+    const latest = transcript[transcript.length - 1];
+    if (latest?.speaker === 'ai' && !speakingRef.current && !thinkingRef.current) {
+      speakingRef.current = true;
+      setIsAiSpeaking(true);
+      speak(latest.text, startListening);
+    }
+  };
+
+  // Notices what a human interviewer would: looking away, leaving the frame or the tab
+  const attentionNudge = useAttentionMonitor(videoRef, phase === 'active');
+  const latestAiText = [...transcript].reverse().find(m => m.speaker === 'ai')?.text || '';
 
   // An interview that already has its report goes straight to it
   const alreadyHasFeedback = phase === 'finished' && !!session?.hasFeedback;
@@ -639,13 +671,43 @@ export default function InterviewSessionPage() {
                       style={{ height: `${h}px`, animationDelay: `${i * 150}ms` }} />
                   ))}
                   <span className="ml-2 text-sm text-gray-400">Alex is speaking</span>
+                  <button onClick={interruptAlex}
+                    className="ml-3 text-xs text-blue-400 hover:text-blue-300 underline underline-offset-2 cursor-pointer">
+                    Answer now
+                  </button>
                 </div>
               )}
               {!isThinking && !isAiSpeaking && !isSaving && (
                 <span className="text-sm text-gray-500">Alex — AI Interviewer</span>
               )}
             </div>
+
+            {/* Live caption of what Alex is saying */}
+            {isAiSpeaking && !isSaving && latestAiText && (
+              <p className="hidden lg:block max-w-xl px-6 text-center text-lg leading-relaxed text-gray-200">
+                {latestAiText}
+              </p>
+            )}
           </div>
+
+          {/* Attention nudge */}
+          {attentionNudge && !isSaving && (
+            <div role="status" className="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex items-start gap-2 max-w-[80%] lg:max-w-md px-4 py-2.5 rounded-lg bg-amber-500/15 border border-amber-500/40 text-amber-200 text-sm shadow-lg">
+              <Eye className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>{attentionNudge}</span>
+            </div>
+          )}
+
+          {/* Camera is off: ask once, and take no for an answer */}
+          {!camEnabled && !camPromptDismissed && !isSaving && (
+            <div className="absolute bottom-4 left-4 z-20 max-w-[60%] lg:max-w-xs p-3 rounded-lg bg-[#202124]/95 border border-white/15 text-sm shadow-xl">
+              <p className="text-gray-200 mb-2">Your camera is off. Turning it on makes this feel like a real interview.</p>
+              <div className="flex gap-2">
+                <button onClick={startCamera} className="px-3 py-1.5 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium cursor-pointer">Turn on camera</button>
+                <button onClick={() => setCamPromptDismissed(true)} className="px-3 py-1.5 rounded-md bg-[#3C4043] hover:bg-[#4d5155] text-gray-200 text-xs cursor-pointer">No thanks</button>
+              </div>
+            </div>
+          )}
 
           {/* Webcam PiP */}
           <div className="absolute bottom-4 right-4 w-28 lg:w-52 aspect-video rounded-xl overflow-hidden border border-white/20 shadow-xl bg-black">
@@ -717,6 +779,9 @@ export default function InterviewSessionPage() {
                 {isListening
                   ? <><span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" /><span className="text-red-400">Listening…</span></>
                   : <span className="text-gray-500">{sttSupported ? 'Your turn — speak or type' : 'Your turn — type your answer (voice input is not supported in this browser)'}</span>}
+                <button onClick={repeatQuestion} className="ml-auto flex items-center gap-1 text-gray-500 hover:text-gray-300 cursor-pointer">
+                  <RotateCcw className="w-3 h-3" /> Repeat question
+                </button>
               </p>
               {/* Scrollable, auto-growing textarea — max 180px then scrolls */}
               <textarea
