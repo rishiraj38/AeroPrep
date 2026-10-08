@@ -45,7 +45,15 @@ function resolveConfig() {
   const baseURL = process.env.AI_BASE_URL || preset.baseURL;
   if (provider !== 'anthropic' && !baseURL) throw new Error(`AI_BASE_URL is required for provider "${provider}".`);
 
-  return { provider, apiKey, model, baseURL, effort: process.env.AI_EFFORT || '' };
+  return {
+    provider,
+    apiKey,
+    model,
+    // Optional cheaper, quicker model for the live interview turns; everything else uses `model`
+    fastModel: process.env.AI_MODEL_FAST || model,
+    baseURL,
+    effort: process.env.AI_EFFORT || ''
+  };
 }
 
 let active = null;
@@ -73,20 +81,31 @@ const stats = { calls: 0, errors: 0, inputTokens: 0, outputTokens: 0, cachedToke
  * @param {string} [request.turnNote]  Per-turn instruction appended to the last user message.
  *   It is never part of the stored history, so it sits after the cache breakpoint.
  * @param {boolean} [request.cache]    Mark `system` + `messages` as a reusable prefix (multi-turn chats).
+ * @param {boolean} [request.fast]     Use AI_MODEL_FAST when it is set (live interview turns).
+ * @param {(delta: string) => void} [request.onText]  Receive the reply as it is generated.
  * @param {number} [request.maxTokens]
+ * @param {number} [request.timeoutMs]  How long to wait for the provider before giving up (or retrying once).
  * @returns {Promise<{text: string, usage: {inputTokens: number, outputTokens: number, cachedTokens: number}}>}
  */
-async function chat({ system = '', messages, turnNote = '', cache = false, maxTokens = 16000 }) {
+async function chat({ system = '', messages, turnNote = '', cache = false, fast = false, onText = null, maxTokens = 16000, timeoutMs = 60000 }) {
   const startedAt = Date.now();
   stats.calls++;
   try {
-    const result = await getActive().complete({ system, messages, turnNote, cache, maxTokens });
+    const { config, complete } = getActive();
+    const model = fast ? config.fastModel : config.model;
+    const result = await complete({ model, system, messages, turnNote, cache, maxTokens, onText, timeoutMs });
     stats.inputTokens += result.usage.inputTokens;
     stats.outputTokens += result.usage.outputTokens;
     stats.cachedTokens += result.usage.cachedTokens;
     return result;
   } catch (error) {
     stats.errors++;
+    // A call that ran to the end but could not be used still cost something
+    if (error.usage) {
+      stats.inputTokens += error.usage.inputTokens;
+      stats.outputTokens += error.usage.outputTokens;
+      stats.cachedTokens += error.usage.cachedTokens;
+    }
     throw error;
   } finally {
     stats.latencies.push(Date.now() - startedAt);
@@ -97,8 +116,8 @@ async function chat({ system = '', messages, turnNote = '', cache = false, maxTo
 // "provider/model" for logs and the monitor page; never throws.
 function describeProvider() {
   try {
-    const { provider, model } = getActive().config;
-    return `${provider}/${model}`;
+    const { provider, model, fastModel } = getActive().config;
+    return `${provider}/${model}${fastModel !== model ? ` (live turns: ${fastModel})` : ''}`;
   } catch (error) {
     return `not configured (${error.message})`;
   }

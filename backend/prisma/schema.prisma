@@ -30,12 +30,17 @@ model Interview {
   resumeURL       String?
   resumeText      String?
   jobDescription  String?
+  // Experience level the candidate chose (intern | junior | mid | senior); null lets the interviewer judge
+  level           String?
   status          String           @default("in_progress")
   // Set on the candidate's first answer; started interviews count against the user's limit
   startedAt       DateTime?
   endedAt         DateTime?
   inputTokens     Int              @default(0)
   outputTokens    Int              @default(0)
+  // Model calls that failed after they may have been paid for. At the cap in limits.js the
+  // interview makes no more calls, so a failure cannot be repeated without end
+  failedCalls     Int              @default(0)
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
   messages        Message[]
@@ -76,6 +81,8 @@ model Question {
   questionText   String
   expectedAnswer String
   userAnswer     String?
+  // The report's note on this answer: what was strong or missing
+  feedback       String?
   order          Int
   createdAt      DateTime  @default(now())
 }

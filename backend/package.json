@@ -8,7 +8,8 @@
     "postinstall": "npx prisma generate",
     "migrate": "npx prisma migrate deploy",
     "lint": "eslint .",
-    "dev": "node --watch index.js"
+    "dev": "node --watch index.js",
+    "test": "node test/e2e.js"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -27,11 +28,12 @@
     "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.3",
     "nodemailer": "^10.0.16",
-    "pdf-extraction": "^1.0.2",
     "prisma": "^5.22.0",
-    "socket.io": "^4.8.3"
+    "socket.io": "^4.8.3",
+    "unpdf": "^1.8.1"
   },
   "devDependencies": {
-    "eslint": "^9.0.0"
+    "eslint": "^9.0.0",
+    "socket.io-client": "^4.8.4"
   }
 }

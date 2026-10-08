@@ -12,6 +12,21 @@ jobs:
     defaults:
       run:
         working-directory: backend
+
+    # A throwaway database for the end-to-end tests
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aeroprep_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     
     steps:
       - uses: actions/checkout@v4
@@ -31,6 +46,11 @@ jobs:
         
       - name: Run Lint
         run: npm run lint
+
+      - name: Run Tests
+        run: npm test
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/aeroprep_test
 
   frontend-ci:
     runs-on: ubuntu-latest
@@ -58,7 +78,3 @@ jobs:
         run: npm run build
         env:
           NEXT_PUBLIC_API_URL: http://localhost:5000 # Mock URL for build phase
-          
-      - name: Run Tests
-        run: npm run test
-        continue-on-error: true

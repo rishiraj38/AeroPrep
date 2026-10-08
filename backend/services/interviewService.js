@@ -1,7 +1,19 @@
 const { Prisma } = require('@prisma/client');
 const { prisma } = require('./prismaClient');
 const { AppError } = require('./appError');
-const { FREE_INTERVIEW_LIMIT, SUPPORT_EMAIL } = require('./limits');
+const { FREE_INTERVIEW_LIMIT, DAILY_INTERVIEW_LIMIT, SUPPORT_EMAIL } = require('./limits');
+
+// Accepts 5 or "5". Rejects "5.0", "0x10", " 5 " and anything else that only looks like a number.
+function toInterviewId(value) {
+  if (typeof value === 'number') return Number.isInteger(value) && value > 0 ? value : NaN;
+  return typeof value === 'string' && /^[1-9]\d{0,8}$/.test(value) ? Number(value) : NaN;
+}
+
+function startOfToday() {
+  const day = new Date();
+  day.setUTCHours(0, 0, 0, 0);
+  return day;
+}
 
 // How many interviews the user has started, and how many they are allowed
 async function getQuota(userId) {
@@ -16,11 +28,18 @@ async function getQuota(userId) {
   return { used, limit, remaining: Math.max(0, limit - used) };
 }
 
-// Throws once the user has used up their interviews
+// Throws once the user has used up their interviews. A quick check for creating an interview;
+// the binding one is startInterview, made when the first answer arrives.
 async function assertCanStartInterview(userId) {
   const quota = await getQuota(userId);
   if (quota.remaining <= 0) {
     throw new AppError(403, 'INTERVIEW_LIMIT_REACHED', `You have used all ${quota.limit} of your free interviews. Email ${SUPPORT_EMAIL} to get more.`);
+  }
+
+  // Site-wide ceiling for the day, so no burst of sign-ups can run up an unbounded model bill
+  const startedToday = await prisma.interview.count({ where: { startedAt: { gte: startOfToday() } } });
+  if (startedToday >= DAILY_INTERVIEW_LIMIT) {
+    throw new AppError(503, 'DAILY_CAPACITY_REACHED', 'AeroPrep has reached its interview capacity for today. Please come back tomorrow.');
   }
   return quota;
 }
@@ -35,13 +54,14 @@ async function getActiveInterview(userId) {
 }
 
 // Create a new interview
-async function createInterview(userId, { resumeURL, resumeText, jobDescription }) {
+async function createInterview(userId, { resumeURL, resumeText, jobDescription, level }) {
   return prisma.interview.create({
     data: {
       userId,
       resumeURL,
       resumeText,
       jobDescription,
+      level,
       status: 'in_progress'
     },
     select: { id: true, status: true, createdAt: true }
@@ -50,8 +70,8 @@ async function createInterview(userId, { resumeURL, resumeText, jobDescription }
 
 // Everything the live session, coding round and feedback need; throws unless the user owns it
 async function loadSession(interviewId, userId) {
-  const id = Number(interviewId);
-  if (!Number.isInteger(id) || !userId) throw new AppError(404, 'NOT_FOUND', 'Interview not found');
+  const id = toInterviewId(interviewId);
+  if (Number.isNaN(id) || !userId) throw new AppError(404, 'NOT_FOUND', 'Interview not found');
 
   const interview = await prisma.interview.findFirst({
     where: { id, userId },
@@ -75,8 +95,40 @@ async function deleteMessage(messageId) {
   await prisma.message.delete({ where: { id: messageId } });
 }
 
-async function markStarted(interviewId, startedAt) {
-  await prisma.interview.update({ where: { id: interviewId }, data: { startedAt } });
+// Marks the interview as started, in one transaction with the limit checks. The user's row is
+// locked first, so first answers sent to several interviews at the same moment are judged one
+// at a time and cannot all slip under the allowance.
+async function startInterview(interviewId, userId) {
+  return prisma.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw`SELECT "interviewLimit" FROM "User" WHERE id = ${userId} FOR UPDATE`;
+    if (locked.length === 0) throw new AppError(401, 'UNAUTHENTICATED', 'User not found');
+
+    const limit = locked[0].interviewLimit ?? FREE_INTERVIEW_LIMIT;
+    const used = await tx.interview.count({ where: { userId, startedAt: { not: null } } });
+    if (used >= limit) {
+      throw new AppError(403, 'INTERVIEW_LIMIT_REACHED', `You have used all ${limit} of your free interviews. Email ${SUPPORT_EMAIL} to get more.`);
+    }
+
+    const startedToday = await tx.interview.count({ where: { startedAt: { gte: startOfToday() } } });
+    if (startedToday >= DAILY_INTERVIEW_LIMIT) {
+      throw new AppError(503, 'DAILY_CAPACITY_REACHED', 'AeroPrep has reached its interview capacity for today. Please come back tomorrow.');
+    }
+
+    const startedAt = new Date();
+    await tx.interview.update({ where: { id: interviewId }, data: { startedAt } });
+    return startedAt;
+  });
+}
+
+// Undo startInterview when the first answer never got a reply, so it does not use up an interview
+async function unstartInterview(interviewId) {
+  await prisma.interview.update({ where: { id: interviewId }, data: { startedAt: null } });
+}
+
+async function ownsInterview(interviewId, userId) {
+  const id = toInterviewId(interviewId);
+  if (Number.isNaN(id)) return false;
+  return !!(await prisma.interview.findFirst({ where: { id, userId }, select: { id: true } }));
 }
 
 async function saveResumeText(interviewId, resumeText) {
@@ -90,6 +142,19 @@ async function addUsage(interviewId, usage) {
     data: {
       inputTokens: { increment: usage.inputTokens },
       outputTokens: { increment: usage.outputTokens }
+    }
+  });
+}
+
+// A model call for this interview failed after it may have been paid for. It is counted (see
+// MAX_FAILED_CALLS in limits.js), along with whatever it is known to have cost.
+async function countFailedCall(interviewId, usage) {
+  await prisma.interview.update({
+    where: { id: interviewId },
+    data: {
+      failedCalls: { increment: 1 },
+      inputTokens: { increment: usage?.inputTokens || 0 },
+      outputTokens: { increment: usage?.outputTokens || 0 }
     }
   });
 }
@@ -182,14 +247,9 @@ async function markCodingSkipped(interviewId) {
   });
 }
 
-// Save final feedback
+// Save final feedback. All of it is written together or not at all: a report that was paid for
+// must never be left half saved, where asking again would pay for another one.
 async function saveFeedback(interviewId, feedback) {
-  // Update interview status to completed
-  await prisma.interview.update({
-    where: { id: interviewId },
-    data: { status: 'completed' }
-  });
-
   const data = {
     totalScore: feedback.totalScore,
     interviewScore: feedback.interviewScore,
@@ -200,10 +260,22 @@ async function saveFeedback(interviewId, feedback) {
     recommendation: feedback.hiringRecommendation
   };
 
-  return prisma.feedback.upsert({
+  const results = await prisma.$transaction([
+    prisma.interview.update({ where: { id: interviewId }, data: { status: 'completed' } }),
+    // The note on each answer goes on its Q&A row; exchange N in the report is the Nth row
+    ...(feedback.answerNotes || []).map(({ exchange, note }) =>
+      prisma.question.updateMany({ where: { interviewId, order: exchange }, data: { feedback: note } })),
+    prisma.feedback.upsert({ where: { interviewId }, update: data, create: { interviewId, ...data } })
+  ]);
+  return results[results.length - 1];
+}
+
+// The interview's questions and answers with the report's note on each
+async function listQuestions(interviewId) {
+  return prisma.question.findMany({
     where: { interviewId },
-    update: data,
-    create: { interviewId, ...data }
+    orderBy: { order: 'asc' },
+    select: { order: true, questionText: true, userAnswer: true, feedback: true }
   });
 }
 
@@ -268,6 +340,8 @@ async function getInterviewById(interviewId, userId) {
 }
 
 module.exports = {
+  toInterviewId,
+  listQuestions,
   saveAppFeedback,
   getQuota,
   assertCanStartInterview,
@@ -276,9 +350,12 @@ module.exports = {
   loadSession,
   appendMessage,
   deleteMessage,
-  markStarted,
+  startInterview,
+  unstartInterview,
+  ownsInterview,
   saveResumeText,
   addUsage,
+  countFailedCall,
   endInterview,
   saveChallenge,
   saveRun,
