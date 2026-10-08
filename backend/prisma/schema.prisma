@@ -38,6 +38,9 @@ model Interview {
   endedAt         DateTime?
   inputTokens     Int              @default(0)
   outputTokens    Int              @default(0)
+  // Model calls that failed after they may have been paid for. At the cap in limits.js the
+  // interview makes no more calls, so a failure cannot be repeated without end
+  failedCalls     Int              @default(0)
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
   messages        Message[]

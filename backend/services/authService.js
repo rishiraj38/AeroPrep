@@ -1,6 +1,8 @@
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { prisma } = require('./prismaClient');
+const { AppError } = require('./appError');
+const { stripControl } = require('./text');
 
 // Never fall back to a secret that is written in the source: anyone could read it and forge
 // tokens. Without JWT_SECRET the server signs with a random one, so sign-ins last until restart.
@@ -15,11 +17,11 @@ async function register(name, email, password) {
   // Cut every field down before examining it. The email pattern below takes time that grows
   // with the square of its input, so it must never see more than a few hundred characters.
   name = String(name ?? '').slice(0, 200).replace(/\p{Cc}+/gu, ' ').trim();
-  email = String(email ?? '').slice(0, 300).trim().toLowerCase();
-  if (name.length < 2 || name.length > 80) throw new Error('Please enter your name.');
-  if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Please enter a valid email.');
+  email = stripControl(String(email ?? '').slice(0, 300)).trim().toLowerCase();
+  if (name.length < 2 || name.length > 80) throw new AppError(400, 'INVALID_NAME', 'Please enter your name.');
+  if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new AppError(400, 'INVALID_EMAIL', 'Please enter a valid email.');
   if (typeof password !== 'string' || password.length < 6 || password.length > 200) {
-    throw new Error('Password must be at least 6 characters.');
+    throw new AppError(400, 'INVALID_PASSWORD', 'Password must be at least 6 characters.');
   }
 
   // Check if user already exists
@@ -28,7 +30,7 @@ async function register(name, email, password) {
   });
   
   if (existingUser) {
-    throw new Error('User with this email already exists');
+    throw new AppError(400, 'EMAIL_TAKEN', 'User with this email already exists');
   }
   
   // Hash password
@@ -50,7 +52,7 @@ async function register(name, email, password) {
 
 // Login user and return JWT token
 async function login(email, password) {
-  email = String(email ?? '').slice(0, 300).trim();
+  email = stripControl(String(email ?? '').slice(0, 300)).trim();
   password = String(password ?? '').slice(0, 300);
 
   // Find user. New accounts are stored lower-cased; older ones may have been saved as typed
@@ -58,14 +60,14 @@ async function login(email, password) {
     || await prisma.user.findUnique({ where: { email } });
   
   if (!user) {
-    throw new Error('Incorrect email or password.');
+    throw new AppError(401, 'INVALID_CREDENTIALS', 'Incorrect email or password.');
   }
   
   // Verify password
   const isValid = await bcrypt.compare(password, user.password);
   
   if (!isValid) {
-    throw new Error('Incorrect email or password.');
+    throw new AppError(401, 'INVALID_CREDENTIALS', 'Incorrect email or password.');
   }
   
   // Generate JWT token
@@ -120,7 +122,7 @@ async function getUserById(userId) {
   });
   
   if (!user) {
-    throw new Error('User not found');
+    throw new AppError(404, 'NOT_FOUND', 'User not found');
   }
   
   const { password: _, ...userWithoutPassword } = user;

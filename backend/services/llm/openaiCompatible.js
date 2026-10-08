@@ -48,7 +48,8 @@ function createOpenAICompatibleProvider({ provider, apiKey, baseURL }) {
   const url = `${baseURL.replace(/\/+$/, '')}/chat/completions`;
   // OpenAI's newer models reject max_tokens; everyone else still expects it.
   const limitField = provider === 'openai' ? 'max_completion_tokens' : 'max_tokens';
-  // Set the first time a provider turns a streamed request down, so later calls skip straight to plain ones
+  // Set once a provider has turned a streamed request down and then taken the same request
+  // plain, so later calls skip straight to plain ones
   let streamingRefused = false;
 
   // These providers cache repeated prefixes on their own, so `cache` needs no markers here.
@@ -65,10 +66,19 @@ function createOpenAICompatibleProvider({ provider, apiKey, baseURL }) {
     };
 
     let lastError;
+    let refusedHere = false; // this request was turned down as a stream and is being sent plain
+    // What earlier attempts of this request cost, when they ran to the end but could not be used
+    const spent = { inputTokens: 0, outputTokens: 0, cachedTokens: 0 };
+    const addSpent = (usage) => {
+      for (const key of Object.keys(spent)) spent[key] += usage[key];
+      return { ...spent };
+    };
+
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      const streaming = !!onText && !streamingRefused;
+      const streaming = !!onText && !streamingRefused && !refusedHere;
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      let reached = false; // the provider answered at all
       let started = false; // some text has already been handed to the caller
       try {
         const response = await fetch(url, {
@@ -83,33 +93,43 @@ function createOpenAICompatibleProvider({ provider, apiKey, baseURL }) {
             : request),
         });
 
+        reached = true;
+
         if (!response.ok) {
           const detail = (await response.text()).slice(0, 300);
-          // A provider that does not understand the streaming options: ask again the plain way
+          // Possibly a provider that does not understand the streaming options: ask again the plain way
           if (streaming && response.status === 400) {
-            streamingRefused = true;
+            refusedHere = true;
             attempt--;
             continue;
           }
           const error = new Error(`${provider} API error ${response.status}: ${detail}`);
           error.retryable = response.status === 429 || response.status >= 500;
+          error.billed = false; // turned down rather than run
           throw error;
         }
 
         if (streaming) {
           const streamed = await readStream(response, (delta) => { started = true; onText(delta); });
           const text = streamed.text.trim();
-          if (!text) throw new Error(`Model returned no text (finish_reason: ${streamed.finishReason}).`);
-          return { text, usage: toUsage(streamed.usage) };
+          const usage = addSpent(toUsage(streamed.usage));
+          // A call that ran to the end was paid for, whatever came back: `completed` says so
+          if (!text) throw Object.assign(new Error(`Model returned no text (finish_reason: ${streamed.finishReason}).`), { usage, completed: true });
+          return { text, usage };
         }
 
         const data = await response.json();
         const text = (data?.choices?.[0]?.message?.content || '').trim();
-        if (!text) throw new Error(`Model returned no text (finish_reason: ${data?.choices?.[0]?.finish_reason}).`);
+        const usage = addSpent(toUsage(data?.usage));
+        if (!text) throw Object.assign(new Error(`Model returned no text (finish_reason: ${data?.choices?.[0]?.finish_reason}).`), { usage, completed: true });
+        // The plain form went through, so it was streaming this provider would not take
+        if (refusedHere) streamingRefused = true;
         if (onText) onText(text);
-        return { text, usage: toUsage(data?.usage) };
+        return { text, usage };
       } catch (error) {
         lastError = error;
+        // fetch itself failing (as opposed to timing out) means the provider was never reached
+        if (!reached && error.name === 'TypeError') error.billed = false;
         // Network failures and timeouts have no `retryable` flag and are worth retrying,
         // unless part of the reply was already delivered: repeating it would say it twice.
         if (started || error.retryable === false || attempt === MAX_ATTEMPTS) break;

@@ -100,6 +100,12 @@ async function chat({ system = '', messages, turnNote = '', cache = false, fast 
     return result;
   } catch (error) {
     stats.errors++;
+    // A call that ran to the end but could not be used still cost something
+    if (error.usage) {
+      stats.inputTokens += error.usage.inputTokens;
+      stats.outputTokens += error.usage.outputTokens;
+      stats.cachedTokens += error.usage.cachedTokens;
+    }
     throw error;
   } finally {
     stats.latencies.push(Date.now() - startedAt);

@@ -1,6 +1,7 @@
 require('dotenv').config();
 
 const { chat } = require('./llm');
+const { stripControl } = require('./text');
 const { RESUME_PROMPT_CHARS, JOB_DESCRIPTION_CHARS } = require('./limits');
 
 // Ceilings on what one call may generate (including the model's own reasoning). Typical use is a
@@ -10,7 +11,7 @@ const MAX_TOKENS = { reply: 2000, challenge: 6000, evaluation: 4000, feedback: 6
 
 // How long to wait for the model. A live reply normally takes two or three seconds, so a
 // candidate should never sit through a minute of silence waiting on a stuck call.
-const REPLY_TIMEOUT_MS = 30000;
+const REPLY_TIMEOUT_MS = Number(process.env.AI_REPLY_TIMEOUT_MS) > 0 ? Number(process.env.AI_REPLY_TIMEOUT_MS) : 30000;
 const JSON_TIMEOUT_MS = 75000;
 
 // Names models use for languages, mapped to the ids the code editor knows
@@ -22,6 +23,12 @@ const LANGUAGE_ALIASES = {
 // The interviewer ends its last message with one of these; they are stripped before the text is shown.
 const END_MARKER = '[END_INTERVIEW]';
 const TERMINATED_MARKER = '[INTERVIEW_TERMINATED]';
+
+// What the interviewer says when a reply was paid for but held nothing that can be said aloud
+// (only a marker, or the model declined). The turn still counts; it is never simply retried.
+const CLOSING_LINE = "That's all we have time for today. Thank you for talking with me, and good luck with your preparation. Goodbye!";
+const RECOVERY_LINE = 'Sorry, I lost my thread for a moment. Could you tell me a little more about that?';
+const NO_USAGE = { inputTokens: 0, outputTokens: 0, cachedTokens: 0 };
 
 /**
  * Sends one request to the configured AI provider (see services/llm) and logs what it cost.
@@ -64,16 +71,24 @@ function cleanJsonResponse(text) {
  */
 async function callAIForJson(prompt, operationName, maxTokens) {
   const usage = { inputTokens: 0, outputTokens: 0, cachedTokens: 0 };
-  const fail = (message) => Object.assign(new Error(message), { usage });
+  const add = (spent) => {
+    for (const key of Object.keys(usage)) usage[key] += spent?.[key] || 0;
+  };
+  // `billed: false` survives only when no attempt of this call cost anything
+  const fail = (message, cause) => Object.assign(new Error(message), {
+    usage,
+    ...(cause?.billed === false && usage.inputTokens + usage.outputTokens === 0 ? { billed: false } : {})
+  });
 
   for (let attempt = 1; ; attempt++) {
     let result;
     try {
       result = await callAI({ messages: [{ role: 'user', content: prompt }], maxTokens, timeoutMs: JSON_TIMEOUT_MS }, operationName);
     } catch (error) {
-      throw fail(error.message);
+      add(error.usage);
+      throw fail(error.message, error);
     }
-    for (const key of Object.keys(usage)) usage[key] += result.usage[key];
+    add(result.usage);
     try {
       return { value: JSON.parse(cleanJsonResponse(result.text)), usage };
     } catch (error) {
@@ -86,9 +101,9 @@ async function callAIForJson(prompt, operationName, maxTokens) {
 // Models sometimes return numbers, arrays or objects where the UI expects text.
 function toText(value) {
   if (value === null || value === undefined) return '';
-  if (typeof value === 'string') return value;
-  if (Array.isArray(value) && value.every((item) => typeof item === 'string')) return value.join('\n');
-  return JSON.stringify(value);
+  if (typeof value === 'string') return stripControl(value);
+  if (Array.isArray(value) && value.every((item) => typeof item === 'string')) return stripControl(value.join('\n'));
+  return stripControl(JSON.stringify(value));
 }
 
 function toScore(value) {
@@ -119,7 +134,7 @@ function createSentenceStream(onSentence) {
   const sentences = [];
 
   const emit = (raw) => {
-    const sentence = raw.replace(END_MARKER, '').replace(TERMINATED_MARKER, '').replace(/\s+/g, ' ').trim();
+    const sentence = stripControl(raw.replace(END_MARKER, '').replace(TERMINATED_MARKER, '').replace(/\s+/g, ' ')).trim();
     if (!sentence) return;
     sentences.push(sentence);
     if (onSentence) onSentence(sentence);
@@ -142,6 +157,8 @@ function createSentenceStream(onSentence) {
       }
       pending = pending.slice(consumed);
     },
+    // The sentences handed over so far, without the unfinished one still being written
+    delivered: () => sentences.join(' '),
     // Call when the reply is complete; returns the whole reply as it was delivered
     finish() {
       emit(pending);
@@ -232,10 +249,15 @@ function interviewTurnNote({ answerNumber, maxAnswers, minutesLeft, final }) {
  * @param {string} [params.level]  A key of LEVELS, or empty to let the interviewer judge from the resume.
  * @param {Array<{speaker: 'ai'|'user', text: string}>} params.history  Full transcript, ending with the candidate's answer.
  * @param {string} params.turnNote  From interviewTurnNote.
+ * @param {boolean} [params.final]  This is the interview's last message.
  * @param {(sentence: string) => void} [params.onSentence]  Called with each sentence as soon as it is complete.
  * @returns {Promise<{text: string, ended: boolean, usage: object}>}
+ *
+ * Throws only when nothing was said: the answer can then be sent again. A reply that broke off
+ * half way keeps the sentences already delivered, and one that was paid for but empty is
+ * replaced by a fixed line, so that neither can be asked for again and again at no cost to the asker.
  */
-async function generateInterviewReply({ resumeText, jobDescription, level, history, turnNote, onSentence }) {
+async function generateInterviewReply({ resumeText, jobDescription, level, history, turnNote, final = false, onSentence }) {
   // The transcript opens with the interviewer, but providers expect the user to speak first.
   const messages = [{ role: 'user', content: '[The candidate has joined the call.]' }];
   for (const entry of history) {
@@ -246,22 +268,37 @@ async function generateInterviewReply({ resumeText, jobDescription, level, histo
   }
 
   const sentences = createSentenceStream(onSentence);
-  const result = await callAI({
-    system: buildInterviewSystemPrompt(resumeText || '', jobDescription || '', level),
-    messages,
-    turnNote,
-    cache: true,
-    fast: true,
-    onText: sentences.push,
-    maxTokens: MAX_TOKENS.reply,
-    timeoutMs: REPLY_TIMEOUT_MS,
-  }, 'Interview Reply');
+  const sayInstead = (ended) => {
+    const line = ended ? CLOSING_LINE : RECOVERY_LINE;
+    if (onSentence) onSentence(line);
+    return line;
+  };
 
-  const ended = result.text.includes(END_MARKER) || result.text.includes(TERMINATED_MARKER);
+  let result;
+  try {
+    result = await callAI({
+      system: buildInterviewSystemPrompt(resumeText || '', jobDescription || '', level),
+      messages,
+      turnNote,
+      cache: true,
+      fast: true,
+      onText: sentences.push,
+      maxTokens: MAX_TOKENS.reply,
+      timeoutMs: REPLY_TIMEOUT_MS,
+    }, 'Interview Reply');
+  } catch (error) {
+    // The reply broke off after part of it had been spoken: keep that part, do not take it back
+    const spoken = sentences.delivered();
+    if (spoken) return { text: spoken, ended: final, usage: error.usage || NO_USAGE };
+    // The call ran to the end but there is nothing to say (the model declined, or sent nothing)
+    if (error.completed) return { text: sayInstead(final), ended: final, usage: error.usage || NO_USAGE };
+    throw error;
+  }
+
+  const ended = final || result.text.includes(END_MARKER) || result.text.includes(TERMINATED_MARKER);
   // The stored reply is exactly the sentences that were delivered, so a client that spoke
   // them as they arrived and one that reads the transcript later see the same text
-  const text = sentences.finish();
-  if (!text) throw new Error('Interview Reply: the model returned no speakable text');
+  const text = sentences.finish() || sayInstead(ended);
   return { text, ended, usage: result.usage };
 }
 
@@ -291,7 +328,7 @@ Structure:
 }`;
   const { value, usage } = await callAIForJson(prompt, 'Generate Coding Challenge', MAX_TOKENS.challenge);
   if (!value || !value.title || !value.problemStatement) {
-    throw new Error('Generate Coding Challenge: the model returned an incomplete challenge');
+    throw Object.assign(new Error('Generate Coding Challenge: the model returned an incomplete challenge'), { usage });
   }
 
   const language = toText(value.language).toLowerCase().trim();
@@ -411,7 +448,7 @@ In "answers", include one entry for every exchange where the interviewer asked a
     // Per-answer notes, keyed by the exchange number used in the prompt
     answerNotes: (Array.isArray(value?.answers) ? value.answers : [])
       .map((answer) => ({ exchange: Math.round(Number(answer?.exchange)), note: toText(answer?.note).trim() }))
-      .filter((answer) => Number.isInteger(answer.exchange) && answer.exchange >= 1 && answer.note),
+      .filter((answer) => Number.isInteger(answer.exchange) && answer.exchange >= 1 && answer.exchange <= pairs.length && answer.note),
   };
   return { feedback, usage };
 }

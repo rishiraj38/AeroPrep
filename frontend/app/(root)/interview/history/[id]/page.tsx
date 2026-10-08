@@ -81,10 +81,12 @@ export default function InterviewDetailPage() {
 
   // Interviews without a report can be picked back up. The interview room works out where
   // they were: mid-conversation, or at the choice between the coding round and the report.
+  // One whose coding round was already handed in has nothing left to choose: it goes to its report.
   const continueInterview = () => {
     if (!interview) return;
     setCurrentInterviewId(interview.id);
-    router.push('/interview/session');
+    const codingDone = !!interview.endedAt && !!interview.codingChallenge?.userCode && !interview.codingChallenge.skipped;
+    router.push(codingDone ? '/interview/feedback' : '/interview/session');
   };
 
   if (loading) {

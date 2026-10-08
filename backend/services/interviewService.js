@@ -146,6 +146,19 @@ async function addUsage(interviewId, usage) {
   });
 }
 
+// A model call for this interview failed after it may have been paid for. It is counted (see
+// MAX_FAILED_CALLS in limits.js), along with whatever it is known to have cost.
+async function countFailedCall(interviewId, usage) {
+  await prisma.interview.update({
+    where: { id: interviewId },
+    data: {
+      failedCalls: { increment: 1 },
+      inputTokens: { increment: usage?.inputTokens || 0 },
+      outputTokens: { increment: usage?.outputTokens || 0 }
+    }
+  });
+}
+
 // Close the conversation and rebuild the Q&A rows shown in history from the transcript
 async function endInterview(interviewId) {
   const messages = await prisma.message.findMany({ where: { interviewId }, orderBy: { id: 'asc' } });
@@ -234,14 +247,9 @@ async function markCodingSkipped(interviewId) {
   });
 }
 
-// Save final feedback
+// Save final feedback. All of it is written together or not at all: a report that was paid for
+// must never be left half saved, where asking again would pay for another one.
 async function saveFeedback(interviewId, feedback) {
-  // Update interview status to completed
-  await prisma.interview.update({
-    where: { id: interviewId },
-    data: { status: 'completed' }
-  });
-
   const data = {
     totalScore: feedback.totalScore,
     interviewScore: feedback.interviewScore,
@@ -252,16 +260,14 @@ async function saveFeedback(interviewId, feedback) {
     recommendation: feedback.hiringRecommendation
   };
 
-  // The note on each answer goes on its Q&A row; exchange N in the report is the Nth row
-  for (const { exchange, note } of feedback.answerNotes || []) {
-    await prisma.question.updateMany({ where: { interviewId, order: exchange }, data: { feedback: note } });
-  }
-
-  return prisma.feedback.upsert({
-    where: { interviewId },
-    update: data,
-    create: { interviewId, ...data }
-  });
+  const results = await prisma.$transaction([
+    prisma.interview.update({ where: { id: interviewId }, data: { status: 'completed' } }),
+    // The note on each answer goes on its Q&A row; exchange N in the report is the Nth row
+    ...(feedback.answerNotes || []).map(({ exchange, note }) =>
+      prisma.question.updateMany({ where: { interviewId, order: exchange }, data: { feedback: note } })),
+    prisma.feedback.upsert({ where: { interviewId }, update: data, create: { interviewId, ...data } })
+  ]);
+  return results[results.length - 1];
 }
 
 // The interview's questions and answers with the report's note on each
@@ -349,6 +355,7 @@ module.exports = {
   ownsInterview,
   saveResumeText,
   addUsage,
+  countFailedCall,
   endInterview,
   saveChallenge,
   saveRun,

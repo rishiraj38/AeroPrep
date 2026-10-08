@@ -21,6 +21,9 @@ module.exports = {
   // "Run & Check" evaluations per coding challenge
   MAX_CODE_RUNS: positiveInt(process.env.CODING_MAX_RUNS, 5),
   MAX_CODE_CHARS: 12000,
+  // Model calls per interview that may fail after possibly being paid for (timeouts, replies
+  // that cannot be used) before the interview stops making calls altogether
+  MAX_FAILED_CALLS: positiveInt(process.env.INTERVIEW_MAX_FAILED_CALLS, 6),
   // Resume text kept in the database, and how much of it goes into each prompt
   RESUME_STORE_CHARS: 8000,
   RESUME_PROMPT_CHARS: 2000,

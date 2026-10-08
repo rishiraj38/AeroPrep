@@ -67,6 +67,7 @@ Backend (`backend/.env`):
 | `FREE_INTERVIEW_LIMIT` | no | Interviews per account. Default 3; `User.interviewLimit` overrides it per user |
 | `DAILY_INTERVIEW_LIMIT` | no | Interviews that may start per day across all users. Default 100. A ceiling on spend |
 | `INTERVIEW_MINUTES`, `INTERVIEW_MAX_ANSWERS`, `CODING_MAX_RUNS` | no | Length of an interview (15), answers in it (12), code evaluations (5) |
+| `INTERVIEW_MAX_FAILED_CALLS` | no | Model calls per interview that may fail after possibly being paid for (a timeout, an unusable reply) before the interview stops making calls. Default 6 |
 | `SMTP_USER`, `SMTP_PASS` | no | Gmail address and app password; in-app feedback is emailed to `SUPPORT_EMAIL` |
 | `SUPPORT_EMAIL` | no | Address shown to users and that receives feedback |
 | `CORS_ORIGINS` | no | Sites allowed to call the API besides the built-in ones, comma separated. **Set this if you host the frontend anywhere other than the default address** |
@@ -76,7 +77,7 @@ Frontend (`frontend/.env.local`): `NEXT_PUBLIC_API_URL`, and optionally `NEXT_PU
 
 ## Cost
 
-Every model call is made by the server, against caps: one call per answer, at most 12 answers, one coding challenge with 5 evaluations, one report. Token use is recorded per interview and shown on `/monitor`. On Claude Opus 5.5 with `AI_EFFORT=low`, a full interview with its report costs roughly ten US cents; setting `AI_MODEL_FAST` to a smaller model cuts that substantially.
+Every model call is made by the server, against caps: one call per answer, at most 12 answers, one coding challenge with 5 evaluations, one report. Calls that fail are bounded too: a reply that was paid for is kept and counted even when it is empty or breaks off, and an interview stops calling the model after a handful of failures that may have been charged. Token use is recorded per interview and shown on `/monitor`. On Claude Opus 5.5 with `AI_EFFORT=low`, a full interview with its report costs roughly ten US cents; setting `AI_MODEL_FAST` to a smaller model cuts that substantially.
 
 ## Tests
 
@@ -91,7 +92,7 @@ The suite starts the real server against that database and a stand-in for the mo
 
 - **Backend (Render):** root directory `backend`, build `npm install`, start `npm start`. After pulling a change that adds a migration, run `npm run migrate` against the production database before the new code starts.
 - **Frontend (Vercel):** root directory `frontend`. Set `NEXT_PUBLIC_API_URL` to the backend's URL.
-- Deploy both together when the API between them changes.
+- When the API between them changes, let the backend finish deploying before the frontend goes out: the new pages call routes the old server does not have.
 
 ## Ideas
 

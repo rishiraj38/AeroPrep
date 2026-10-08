@@ -1,5 +1,5 @@
-// Runs in a worker thread (see pdfService.js) so that a slow or hostile PDF can be cut off
-// without freezing the server.
+// Does the actual reading, in a worker thread of the reader process (see pdfReader.js),
+// so that a slow or hostile PDF can be cut off while it is still being parsed.
 const { parentPort, workerData } = require('worker_threads');
 
 (async () => {

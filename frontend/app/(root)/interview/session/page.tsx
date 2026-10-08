@@ -4,8 +4,8 @@ import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { getToken, removeToken } from '@/lib/auth';
-import { skipCoding, endInterview } from '@/lib/api';
+import { getToken } from '@/lib/auth';
+import { skipCoding, endInterview, expireSession } from '@/lib/api';
 import { getCurrentInterviewId, clearCurrentInterview } from '@/lib/currentInterview';
 import { useAttentionMonitor } from '@/lib/useAttentionMonitor';
 import { io, Socket } from 'socket.io-client';
@@ -35,9 +35,19 @@ const VOICE_PREFERENCES: RegExp[] = [
   /^Microsoft (Aria|Jenny|Zira)/,              // Windows
 ];
 
-// "One. Two? Three" -> ["One.", "Two?", "Three"]
+// "One. Two? Three" -> ["One.", "Two?", "Three"]. Splits where the server does: only after
+// punctuation that ends a sentence, so "Node.js" and "3.5" are not chopped into pieces.
 function splitSentences(text: string): string[] {
-  return (text.match(/[^.!?]+(?:[.!?]+["')]*|$)/g) || []).map(part => part.trim()).filter(Boolean);
+  const parts: string[] = [];
+  const sentenceEnd = /[.!?]["')]*(?:\s+|$)/g;
+  let from = 0;
+  for (let match = sentenceEnd.exec(text); match && from < text.length; match = sentenceEnd.exec(text)) {
+    const end = match.index + match[0].length;
+    parts.push(text.slice(from, end).trim());
+    from = end;
+  }
+  if (from < text.length) parts.push(text.slice(from).trim());
+  return parts.filter(Boolean);
 }
 
 function pickVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null {
@@ -152,6 +162,7 @@ export default function InterviewSessionPage() {
   const finishedRef      = useRef(false);  // this page has left the call
   const presentedRef     = useRef(0);      // transcript messages already shown and spoken
   const wantListenRef    = useRef(false);  // true only while it is the candidate's turn
+  const typingPausedRef  = useRef(false);  // the candidate is typing this answer, so the mic stays off
   const sttFinalRef      = useRef('');     // finalised speech for the current answer
   const answersUsedRef   = useRef(0);      // answers the server has recorded
   const silenceTimerRef  = useRef<NodeJS.Timeout | null>(null);
@@ -208,6 +219,7 @@ export default function InterviewSessionPage() {
   // The candidate started typing: stop the recogniser and throw away whatever it had not finished
   const pauseListeningToType = useCallback(() => {
     wantListenRef.current = false;
+    typingPausedRef.current = true;
     try { recognitionRef.current?.abort(); } catch (_) {}
     setIsListening(false);
     setMicPausedToType(true);
@@ -219,6 +231,7 @@ export default function InterviewSessionPage() {
     // start() throws if the recogniser is still winding down; its onend handler restarts it
     try { recognitionRef.current.start(); } catch (_) {}
     setIsListening(true);
+    typingPausedRef.current = false;
     setMicPausedToType(false);
   }, []);
 
@@ -394,7 +407,8 @@ export default function InterviewSessionPage() {
     // and unless the interview is over it is the candidate's turn, so the mic comes back on.
     if (turnRef.current && !turnRef.current.closed) abandonTurn();
     if (endedRef.current) endCall();
-    else if (!speakingRef.current) startListening();
+    // (not while an answer is being typed: a reconnect must not switch the mic back on under it)
+    else if (!speakingRef.current && !typingPausedRef.current) startListening();
   }, [speak, sayInTurn, closeTurn, abandonTurn, afterReply, startListening, endCall, showFinished, goToPhase]);
 
   // A sentence of the reply, sent by the server as soon as it is written
@@ -636,10 +650,8 @@ export default function InterviewSessionPage() {
 
     sock.on('connect_error', (err) => {
       console.error('[Socket] connection error', err.message);
-      if (err.message === 'unauthorized') {
-        removeToken();
-        router.push('/sign-in');
-      }
+      // The login is no longer accepted: sign out and say why on the sign-in page
+      if (err.message === 'unauthorized') expireSession();
     });
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -788,7 +800,8 @@ export default function InterviewSessionPage() {
 
   // Post-interview screen
   if (phase === 'finished') {
-    const answered = (session?.answersUsed ?? 0) > 0;
+    // The first answer is only the reply to the greeting; a report needs an interview question answered
+    const answered = (session?.answersUsed ?? 0) >= 2;
     if (alreadyHasFeedback) return null;
     return (
       <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-slate-950">
@@ -798,7 +811,7 @@ export default function InterviewSessionPage() {
           <p className="text-gray-400 mb-8">
             {answered
               ? 'Would you like to do the coding challenge before you see your report? It is optional.'
-              : 'The interview ended before any question was answered, so there is no coding round for it.'}
+              : 'The interview ended before an interview question was answered, so there is no coding round for it.'}
           </p>
           <div className="flex flex-col gap-4">
             {endError && (
@@ -1158,7 +1171,11 @@ export default function InterviewSessionPage() {
             <h2 id="end-title" className="text-xl font-bold mb-2">End the interview now?</h2>
             <p id="end-text" className="text-sm text-gray-300 mb-6">
               You cannot come back to it once it has ended.
-              {(session?.answersUsed ?? 0) > 0 ? ' You will go on to the optional coding round and your report.' : ' You have not answered anything yet, so it will not count as one of your interviews.'}
+              {(session?.answersUsed ?? 0) >= 2
+                ? ' You will go on to the optional coding round and your report.'
+                : (session?.answersUsed ?? 0) === 1
+                  ? ' It already counts as one of your interviews, and with no interview question answered yet there will be nothing to score.'
+                  : ' You have not answered anything yet, so it will not count as one of your interviews.'}
             </p>
             <div className="flex gap-3">
               <Button autoFocus onClick={() => setConfirmEnd(false)} variant="outline"

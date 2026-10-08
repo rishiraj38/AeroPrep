@@ -1,14 +1,36 @@
 // A stand-in for the Anthropic Messages API, for tests. Understands plain and streamed requests.
+//
+// Words in the newest message make it misbehave the way a real provider sometimes does:
+//   FAIL_PLEASE         the request is turned down with a 500 (not charged for)
+//   ONLY_MARKER_PLEASE  the reply is nothing but the end marker
+//   REFUSE_PLEASE       the model declines (stop_reason "refusal", no text)
+//   CUT_OFF_PLEASE      the reply breaks off after its first sentence
+//   STALL_PLEASE        the reply starts and then never arrives
+//   BAD_JSON_PLEASE     a JSON answer that is not JSON
+//   NUL_PLEASE          a JSON answer carrying a character PostgreSQL cannot store
 const http = require('http');
+
+// The newest thing the caller said
+function newest(body) {
+  const last = body.messages[body.messages.length - 1];
+  return typeof last.content === 'string' ? last.content : last.content.map((block) => block.text).join('\n');
+}
 
 function replyFor(body, count) {
   const flat = JSON.stringify(body);
+  const latest = newest(body);
   if (flat.includes('You are Alex')) {
+    if (latest.includes('ONLY_MARKER_PLEASE')) return '[END_INTERVIEW]';
+    if (latest.includes('CUT_OFF_PLEASE')) return 'First part is here. Second part never finishes';
     return flat.includes('This is your final message')
       ? 'Thank you, that was great. Goodbye! [END_INTERVIEW]'
       : `Interesting. Question after call ${count}?`;
   }
+  if (latest.includes('BAD_JSON_PLEASE')) return 'I would rather chat than write JSON.';
   if (flat.includes('-difficulty coding challenge')) {
+    if (latest.includes('NUL_PLEASE')) {
+      return JSON.stringify({ language: 'javascript', title: 'Echo\u0000 It', description: 'Return\u0000 the input', problemStatement: 'Print what you read.', constraints: 'none', starterCode: '// go', testCases: [{ input: 'a\u0000b', expectedOutput: 'ab' }] });
+    }
     return '```json\n' + JSON.stringify({ language: 'Python', title: 'Two Sum', description: 'Find two numbers', problemStatement: 'Given nums and target...', constraints: ['n <= 1e4', 'O(n)'], starterCode: 'def solve(nums, target):\n    pass', testCases: [{ input: [2, 7, 11], expectedOutput: [0, 1] }, { input: { nums: [3, 3] }, expectedOutput: 6 }] }) + '\n```';
   }
   if (flat.includes('You are a code evaluator')) {
@@ -40,22 +62,31 @@ function createFakeAnthropic({ delayMs = 0, pieceDelayMs = 0 } = {}) {
         return res.end(JSON.stringify({ type: 'error', error: { type: 'api_error', message: 'boom' } }));
       }
       const text = replyFor(body, state.count);
-      const message = { id: 'msg', type: 'message', role: 'assistant', model: body.model, stop_reason: 'end_turn', stop_sequence: null };
+      const latest = newest(body);
+      const refused = latest.includes('REFUSE_PLEASE');
+      const message = { id: 'msg', type: 'message', role: 'assistant', model: body.model, stop_reason: refused ? 'refusal' : 'end_turn', stop_sequence: null };
 
       if (!body.stream) {
         res.setHeader('content-type', 'application/json');
-        return setTimeout(() => res.end(JSON.stringify({ ...message, content: [{ type: 'text', text }], usage })), delayMs);
+        return setTimeout(() => res.end(JSON.stringify({ ...message, content: refused ? [] : [{ type: 'text', text }], usage })), delayMs);
       }
 
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
       const send = (event) => res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
       send({ type: 'message_start', message: { ...message, stop_reason: null, content: [], usage: { ...usage, output_tokens: 1 } } });
+      if (latest.includes('STALL_PLEASE')) return; // the connection stays open and silent
+      if (refused) {
+        send({ type: 'message_delta', delta: { stop_reason: 'refusal', stop_sequence: null }, usage: { output_tokens: usage.output_tokens } });
+        send({ type: 'message_stop' });
+        return res.end();
+      }
       send({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } });
       // Odd-sized pieces, so sentence ends and the control marker get split across them
       for (let i = 0; i < text.length; i += 7) {
         if (pieceDelayMs) await new Promise((r) => setTimeout(r, pieceDelayMs));
         send({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: text.slice(i, i + 7) } });
       }
+      if (latest.includes('CUT_OFF_PLEASE')) return setTimeout(() => res.destroy(), 50); // the line drops mid-reply
       send({ type: 'content_block_stop', index: 0 });
       send({ type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: usage.output_tokens } });
       send({ type: 'message_stop' });

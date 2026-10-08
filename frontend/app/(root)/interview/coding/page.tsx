@@ -229,8 +229,12 @@ export default function CodingRoundPage() {
      setConfirming(null);
      setIsNavigating(true);
      try {
-         // A failed check does not stop the candidate from finishing; the code is still saved
-         if (checkFirst) await check();
+         // Asked for a check first: if it could not be made, stay here so it can be tried again
+         // (finishing without one is still a button away)
+         if (checkFirst && !(await check())) {
+           setIsNavigating(false);
+           return;
+         }
          await submitCode(id, code);
          goToFeedback();
      } catch (error: any) {
@@ -245,7 +249,7 @@ export default function CodingRoundPage() {
      setConfirming(null);
      setIsNavigating(true);
      try {
-         await skipCoding(id);
+         await skipCoding(id, true);
          goToFeedback();
      } catch (error: any) {
          const message = error.message || 'Could not skip the coding round. Please try again.';

@@ -10,6 +10,7 @@ const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const { extractTextFromBuffer, looksLikePdf, MAX_PDF_BYTES } = require('./services/pdfService');
 const { describeProvider, stats: aiStats } = require('./services/llm');
 const { AppError } = require('./services/appError');
+const { stripControl, cleanCandidateText } = require('./services/text');
 const { register, login, authMiddleware, getUserById, JWT_SECRET } = require('./services/authService');
 const {
   saveAppFeedback,
@@ -302,6 +303,16 @@ app.get('/health', (req, res) => {
 });
 
 
+// Sends an AppError as-is. Anything else is logged and hidden behind a generic message: the
+// text of an unexpected error (a database failure, say) can name hosts and tables.
+function sendError(res, error, context) {
+  if (error instanceof AppError) {
+    return res.status(error.status).json({ error: error.message, code: error.code });
+  }
+  console.error(`${context}:`, error);
+  res.status(500).json({ error: 'Something went wrong. Please try again.', code: 'INTERNAL_ERROR' });
+}
+
 // AUTH ROUTES
 
 
@@ -316,8 +327,7 @@ app.post('/auth/register', authLimiter, signupLimiter, async (req, res) => {
     const user = await register(name, email, password);
     res.status(201).json({ user, message: 'Account created successfully' });
   } catch (error) {
-    console.error('Registration error:', error);
-    res.status(400).json({ error: error.message });
+    sendError(res, error, 'Registration error');
   }
 });
 
@@ -332,8 +342,7 @@ app.post('/auth/login', authLimiter, loginLimiter, async (req, res) => {
     const result = await login(email, password);
     res.json(result);
   } catch (error) {
-    console.error('Login error:', error);
-    res.status(401).json({ error: error.message });
+    sendError(res, error, 'Login error');
   }
 });
 
@@ -342,20 +351,11 @@ app.get('/auth/me', authMiddleware, async (req, res) => {
     const user = await getUserById(req.userId);
     res.json({ user, quota: await getQuota(req.userId) });
   } catch (error) {
-    res.status(404).json({ error: error.message });
+    sendError(res, error, 'Error loading the account');
   }
 });
 
 // INTERVIEW ROUTES (Protected)
-
-// Sends an AppError as-is; anything else is logged and hidden behind a generic message
-function sendError(res, error, context) {
-  if (error instanceof AppError) {
-    return res.status(error.status).json({ error: error.message, code: error.code });
-  }
-  console.error(`${context}:`, error);
-  res.status(500).json({ error: 'Something went wrong. Please try again.', code: 'INTERNAL_ERROR' });
-}
 
 // Collapse the stray spacing PDF extraction leaves behind, so the same resume costs fewer tokens
 // Works line by line on a bounded amount of text, so the time it takes grows only in step with
@@ -365,7 +365,7 @@ const MAX_TIDY_CHARS = 60000;
 function tidyText(text) {
   return String(text ?? '').slice(0, MAX_TIDY_CHARS)
     .split(/\r\n?|\n/)
-    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .map((line) => cleanCandidateText(line).replace(/\s+/g, ' ').trim())
     .filter(Boolean)
     .join('\n');
 }
@@ -384,6 +384,9 @@ app.post('/resumes/extract', authMiddleware, uploadLimiter,
       try {
         text = tidyText(await extractTextFromBuffer(req.body));
       } catch (error) {
+        if (error.busy) {
+          throw new AppError(503, 'BUSY', 'Many resumes are being read right now. Please try again in a moment.');
+        }
         console.warn(`Resume from user ${req.userId} could not be read: ${error.message}`);
       }
       if (!text) {
@@ -489,7 +492,7 @@ app.post('/interviews/:id/coding/submit', authMiddleware, aiLimiter, async (req,
 
 app.post('/interviews/:id/coding/skip', authMiddleware, aiLimiter, async (req, res) => {
   try {
-    res.json(await skipCoding(req.params.id, req.userId));
+    res.json(await skipCoding(req.params.id, req.userId, { discard: req.body.discard === true }));
   } catch (error) {
     sendError(res, error, 'Error skipping coding round');
   }
@@ -509,7 +512,7 @@ app.post('/interviews/:id/feedback', authMiddleware, aiLimiter, async (req, res)
 
 app.post('/feedback', authMiddleware, feedbackLimiter, async (req, res) => {
   const rating = Number(req.body.rating);
-  const message = String(req.body.message || '').trim().slice(0, 2000);
+  const message = stripControl(req.body.message).trim().slice(0, 2000);
   const claimedInterview = req.body.interviewId;
 
   if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
@@ -567,7 +570,17 @@ io.use((socket, next) => {
 // Limits per signed-in user across all their connections; reconnecting does not reset them
 const MAX_SOCKETS_PER_USER = 5;
 const MAX_SOCKET_EVENTS_PER_MINUTE = 60;   // a real interview sends a handful
+const SOCKET_WINDOW_MS = 60 * 1000;
 const socketUsage = new Map();             // userId -> { sockets, events, windowStart }
+
+// A user's count is kept until its minute is over even after they disconnect, or dropping the
+// connection and opening a new one would be a way to start counting from zero
+setInterval(() => {
+  const now = Date.now();
+  for (const [userId, usage] of socketUsage) {
+    if (usage.sockets <= 0 && now - usage.windowStart >= SOCKET_WINDOW_MS) socketUsage.delete(userId);
+  }
+}, SOCKET_WINDOW_MS).unref();
 
 function usageFor(userId) {
   if (!socketUsage.has(userId)) socketUsage.set(userId, { sockets: 0, events: 0, windowStart: Date.now() });
@@ -604,7 +617,7 @@ io.on('connection', (socket) => {
   usage.sockets++;
   socket.use((packet, next) => {
     const now = Date.now();
-    if (now - usage.windowStart >= 60 * 1000) {
+    if (now - usage.windowStart >= SOCKET_WINDOW_MS) {
       usage.windowStart = now;
       usage.events = 0;
     }
@@ -620,7 +633,6 @@ io.on('connection', (socket) => {
   });
   socket.on('disconnect', () => {
     usage.sockets--;
-    if (usage.sockets <= 0) socketUsage.delete(socket.userId);
   });
 
   // Each event is acknowledged with { ok, state } — the full interview state as stored on the

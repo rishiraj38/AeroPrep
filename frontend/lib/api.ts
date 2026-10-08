@@ -186,8 +186,11 @@ export async function submitCode(interviewId: number, code: string): Promise<Cod
   return data.challenge;
 }
 
-export async function skipCoding(interviewId: number) {
-  return request(`/interviews/${interviewId}/coding/skip`, { method: 'POST' });
+// Leaves the coding round out of the report. Without `discard`, code that was already handed
+// in is kept (declining the round up front must never erase earlier work); the Skip button
+// beside the editor passes it to set that code aside on purpose.
+export async function skipCoding(interviewId: number, discard: boolean = false) {
+  return request(`/interviews/${interviewId}/coding/skip`, { method: 'POST', body: { discard } });
 }
 
 // What the user thought of AeroPrep itself; saved and emailed to the team
