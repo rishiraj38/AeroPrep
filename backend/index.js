@@ -2,22 +2,19 @@ require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const crypto = require('crypto');
 const cors = require('cors');
 const helmet = require('helmet');
-const { rateLimit } = require('express-rate-limit');
-
-// Resume uploads need ImageKit; without its keys the server still runs and interviews
-// can be started from manually entered details
-const imagekitConfigured = !!(process.env.IMAGEKIT_PUBLIC_KEY && process.env.IMAGEKIT_PRIVATE_KEY && process.env.IMAGEKIT_URL_ENDPOINT);
+const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 
 // Services
-const { extractTextFromPdf } = require('./services/pdfService');
+const { extractTextFromBuffer, looksLikePdf, MAX_PDF_BYTES } = require('./services/pdfService');
 const { describeProvider, stats: aiStats } = require('./services/llm');
 const { AppError } = require('./services/appError');
 const { register, login, authMiddleware, getUserById, JWT_SECRET } = require('./services/authService');
 const {
   saveAppFeedback,
+  toInterviewId,
+  ownsInterview,
   getQuota,
   assertCanStartInterview,
   getActiveInterview,
@@ -37,16 +34,22 @@ const {
 } = require('./services/sessionService');
 const { RESUME_STORE_CHARS, JOB_DESCRIPTION_CHARS } = require('./services/limits');
 const { mailConfigured, sendFeedbackEmail } = require('./services/mailService');
+const { LEVELS } = require('./services/aiService');
 
 const app = express();
 
 // Behind Render's proxy, so the client's address is in X-Forwarded-For
 app.set('trust proxy', 1);
 
-// Browsers may only call this API from the app's own pages. Add more with CORS_ORIGINS (comma separated).
+// Browsers may only call this API from the app's own pages: the production address, this
+// project's other deployments on Vercel (preview and per-commit addresses, which all end in the
+// team's name), and local development. Add a custom domain with CORS_ORIGINS (comma separated).
+// This is a second line of defence, not the lock on the door: a login travels as a bearer
+// token rather than a cookie, so a page on another site cannot act as a signed-in visitor.
 const allowedOrigins = [
   'http://localhost:3000',
-  /^https:\/\/ai-interview-coach[a-z0-9-]*\.vercel\.app$/,
+  'https://ai-interview-coach-eight-mu.vercel.app',
+  /^https:\/\/ai-interview-coach(-[a-z0-9-]+)?-rishiraj38s-projects\.vercel\.app$/,
   ...(process.env.CORS_ORIGINS || '').split(',').map((origin) => origin.trim()).filter(Boolean)
 ];
 const corsOptions = { origin: allowedOrigins };
@@ -54,25 +57,50 @@ const corsOptions = { origin: allowedOrigins };
 app.use(helmet());
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '200kb' }));
+app.use((req, res, next) => {
+  if (req.body === undefined) req.body = {};
+  next();
+});
 
 // ─── Rate limits ─────────────────────────────────────────────────────────────
-function limiter(windowMinutes, limit, message, keyGenerator) {
+// On Render every request arrives through Cloudflare, so the address Express sees is an edge
+// server shared by many visitors, not the visitor. Cloudflare reports the real client in
+// CF-Connecting-IP and rejects requests that try to supply that header themselves.
+const behindCloudflare = !!process.env.RENDER || process.env.TRUST_CLOUDFLARE === 'true';
+
+function clientAddress(req) {
+  const fromEdge = behindCloudflare ? req.headers['cf-connecting-ip'] : null;
+  return ipKeyGenerator(typeof fromEdge === 'string' && fromEdge ? fromEdge : req.ip);
+}
+
+function limiter(windowMinutes, limit, message, keyGenerator = clientAddress) {
   return rateLimit({
     windowMs: windowMinutes * 60 * 1000,
     limit,
     standardHeaders: 'draft-7',
     legacyHeaders: false,
-    ...(keyGenerator ? { keyGenerator } : {}),
+    keyGenerator,
     message: { error: message, code: 'RATE_LIMITED' }
   });
 }
 
+// One address is often a whole classroom or office behind a single router, so the per-address
+// limits are ceilings against floods; the tight limits are per account.
+
 // Everything, per address
-const generalLimiter = limiter(15, 300, 'Too many requests. Please slow down and try again shortly.');
-// Sign-in and sign-up, per address: slows down password guessing and mass account creation
-const authLimiter = limiter(15, 15, 'Too many attempts. Please wait a few minutes and try again.');
+const generalLimiter = limiter(15, 2000, 'Too many requests. Please slow down and try again shortly.');
+// Password guessing: attempts on one account from one address
+const loginLimiter = limiter(15, 10, 'Too many sign-in attempts. Please wait a few minutes and try again.',
+  (req) => `${clientAddress(req)}|${String(req.body?.email || '').trim().toLowerCase().slice(0, 200)}`);
+// Sign-in and sign-up from one address, whatever the account
+const authLimiter = limiter(15, 120, 'Too many attempts. Please wait a few minutes and try again.');
+// New accounts from one address
+const signupLimiter = limiter(60, 30, 'Too many accounts created from this network. Please try again in an hour.');
 // Routes that can call the model or create interviews, per signed-in user
 const aiLimiter = limiter(10, 40, 'You are doing that too often. Please wait a few minutes.', (req) => `user:${req.userId}`);
+
+// Resume uploads, per signed-in user: each one is parsed on this server
+const uploadLimiter = limiter(60, 20, 'You have uploaded a lot of resumes. Please try again in an hour.', (req) => `user:${req.userId}`);
 
 // Product feedback, per signed-in user
 const feedbackLimiter = limiter(60, 5, 'Thanks, we have your feedback. Please try again later.', (req) => `user:${req.userId}`);
@@ -155,7 +183,7 @@ app.get('/monitor', monitorAccess, (req, res) => {
 </head>
 <body>
   <h1>🚀 AeroPrep — Live Monitor</h1>
-  <p class="sub">Auto-refreshes every 5s &nbsp;|&nbsp; Uptime: <strong>${upStr}</strong> &nbsp;|&nbsp; ${new Date().toLocaleTimeString()}</p>
+  <p class="sub">Auto-refreshes every 5s &nbsp;|&nbsp; Uptime: <strong>${upStr}</strong> &nbsp;|&nbsp; ${new Date().toLocaleTimeString()} &nbsp;|&nbsp; You are seen as ${clientAddress(req)}</p>
 
   <p class="section">Server Health</p>
   <div class="grid">
@@ -277,7 +305,7 @@ app.get('/health', (req, res) => {
 // AUTH ROUTES
 
 
-app.post('/auth/register', authLimiter, async (req, res) => {
+app.post('/auth/register', authLimiter, signupLimiter, async (req, res) => {
   const { name, email, password } = req.body;
   
   if (!name || !email || !password) {
@@ -293,7 +321,7 @@ app.post('/auth/register', authLimiter, async (req, res) => {
   }
 });
 
-app.post('/auth/login', authLimiter, async (req, res) => {
+app.post('/auth/login', authLimiter, loginLimiter, async (req, res) => {
   const { email, password } = req.body;
   
   if (!email || !password) {
@@ -329,22 +357,44 @@ function sendError(res, error, context) {
   res.status(500).json({ error: 'Something went wrong. Please try again.', code: 'INTERNAL_ERROR' });
 }
 
-// Resumes are uploaded to ImageKit, so that is the only place the server will download one from
-function isAllowedResumeUrl(url) {
-  try {
-    const { protocol, hostname } = new URL(url);
-    const allowedHosts = ['ik.imagekit.io'];
-    if (process.env.IMAGEKIT_URL_ENDPOINT) allowedHosts.push(new URL(process.env.IMAGEKIT_URL_ENDPOINT).hostname);
-    return protocol === 'https:' && allowedHosts.includes(hostname);
-  } catch {
-    return false;
-  }
+// Collapse the stray spacing PDF extraction leaves behind, so the same resume costs fewer tokens
+// Works line by line on a bounded amount of text, so the time it takes grows only in step with
+// the input; an earlier single-pattern version could be stalled for seconds by crafted spacing.
+const MAX_TIDY_CHARS = 60000;
+
+function tidyText(text) {
+  return String(text ?? '').slice(0, MAX_TIDY_CHARS)
+    .split(/\r\n?|\n/)
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join('\n');
 }
 
-// Collapse the stray spacing PDF extraction leaves behind, so the same resume costs fewer tokens
-function tidyText(text) {
-  return String(text || '').replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, '\n').trim();
-}
+// RESUMES — the PDF is read here and only its text is kept; the file itself is never stored
+
+app.post('/resumes/extract', authMiddleware, uploadLimiter,
+  express.raw({ type: ['application/pdf', 'application/octet-stream'], limit: MAX_PDF_BYTES }),
+  async (req, res) => {
+    try {
+      if (!looksLikePdf(req.body)) {
+        throw new AppError(400, 'NOT_A_PDF', 'Please upload your resume as a PDF file.');
+      }
+
+      let text = '';
+      try {
+        text = tidyText(await extractTextFromBuffer(req.body));
+      } catch (error) {
+        console.warn(`Resume from user ${req.userId} could not be read: ${error.message}`);
+      }
+      if (!text) {
+        throw new AppError(422, 'UNREADABLE_RESUME', 'We could not read any text from that PDF. Upload a text-based PDF, or enter your details manually.');
+      }
+
+      res.json({ text: text.slice(0, RESUME_STORE_CHARS) });
+    } catch (error) {
+      sendError(res, error, 'Error reading resume');
+    }
+  });
 
 // How many interviews the user has left, and any interview they can resume
 app.get('/interviews/quota', authMiddleware, async (req, res) => {
@@ -358,37 +408,18 @@ app.get('/interviews/quota', authMiddleware, async (req, res) => {
 
 // Create interview
 app.post('/interviews', authMiddleware, aiLimiter, async (req, res) => {
-  const { resumeURL, jobDescription, resumeText } = req.body;
+  const resumeText = tidyText(req.body.resumeText).slice(0, RESUME_STORE_CHARS);
+  const jobDescription = tidyText(req.body.jobDescription).slice(0, JOB_DESCRIPTION_CHARS);
+  const level = Object.hasOwn(LEVELS, req.body.level) ? req.body.level : null;
 
-  // Require either resumeURL or resumeText/jobDescription
-  if (!resumeURL && !resumeText && !jobDescription) {
-    return res.status(400).json({ error: 'resumeURL, resumeText, or jobDescription is required' });
+  if (!resumeText && !jobDescription) {
+    return res.status(400).json({ error: 'A resume or a job description is required' });
   }
 
   try {
     await assertCanStartInterview(req.userId);
 
-    // Extract the resume text once, here, so no later step has to download the PDF again
-    let text = tidyText(resumeText);
-    if (resumeURL && !text) {
-      if (!isAllowedResumeUrl(resumeURL)) {
-        throw new AppError(400, 'INVALID_RESUME_URL', 'That resume link is not valid. Please upload the PDF again.');
-      }
-      try {
-        text = tidyText(await extractTextFromPdf(resumeURL));
-      } catch {
-        text = '';
-      }
-      if (!text) {
-        throw new AppError(422, 'UNREADABLE_RESUME', 'We could not read any text from that PDF. Upload a text-based PDF, or enter your details manually.');
-      }
-    }
-
-    const interview = await createInterview(req.userId, {
-      resumeURL: resumeURL || 'manual-entry.local',
-      resumeText: text.slice(0, RESUME_STORE_CHARS),
-      jobDescription: tidyText(jobDescription).slice(0, JOB_DESCRIPTION_CHARS)
-    });
+    const interview = await createInterview(req.userId, { resumeText, jobDescription, level });
 
     console.log(`Interview ${interview.id} created for user ${req.userId}`);
     metrics.interviews.created++;
@@ -410,14 +441,23 @@ app.get('/interviews', authMiddleware, async (req, res) => {
 
 // Get single interview details
 app.get('/interviews/:id', authMiddleware, async (req, res) => {
-  const interviewId = parseInt(req.params.id);
-
   try {
-    if (isNaN(interviewId)) throw new AppError(404, 'NOT_FOUND', 'Interview not found');
+    const interviewId = toInterviewId(req.params.id);
+    if (Number.isNaN(interviewId)) throw new AppError(404, 'NOT_FOUND', 'Interview not found');
     const interview = await getInterviewById(interviewId, req.userId);
     res.json({ interview });
   } catch (error) {
     sendError(res, error, 'Error fetching interview');
+  }
+});
+
+// End the conversation. The live room does this over its socket; this is the same thing over
+// plain HTTP, for when that connection has dropped. Ending twice is harmless.
+app.post('/interviews/:id/end', authMiddleware, async (req, res) => {
+  try {
+    res.json({ state: await finishInterview(req.params.id, req.userId) });
+  } catch (error) {
+    sendError(res, error, 'Error ending interview');
   }
 });
 
@@ -459,7 +499,7 @@ app.post('/interviews/:id/coding/skip', authMiddleware, aiLimiter, async (req, r
 
 app.post('/interviews/:id/feedback', authMiddleware, aiLimiter, async (req, res) => {
   try {
-    res.json({ feedback: await getOrCreateFeedback(req.params.id, req.userId) });
+    res.json(await getOrCreateFeedback(req.params.id, req.userId));
   } catch (error) {
     sendError(res, error, 'Error generating feedback');
   }
@@ -470,13 +510,14 @@ app.post('/interviews/:id/feedback', authMiddleware, aiLimiter, async (req, res)
 app.post('/feedback', authMiddleware, feedbackLimiter, async (req, res) => {
   const rating = Number(req.body.rating);
   const message = String(req.body.message || '').trim().slice(0, 2000);
-  const interviewId = Number.isInteger(Number(req.body.interviewId)) ? Number(req.body.interviewId) : null;
+  const claimedInterview = req.body.interviewId;
 
   if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
     return res.status(400).json({ error: 'Please choose a rating from 1 to 5.' });
   }
 
   try {
+    const interviewId = (await ownsInterview(claimedInterview, req.userId)) ? toInterviewId(claimedInterview) : null;
     const saved = await saveAppFeedback(req.userId, { interviewId, rating, message });
     sendFeedbackEmail(saved); // not awaited: the user should not wait on the mail server
     res.status(201).json({ success: true });
@@ -485,17 +526,16 @@ app.post('/feedback', authMiddleware, feedbackLimiter, async (req, res) => {
   }
 });
 
-// IMAGEKIT AUTH
-
-// Signs a browser upload the way ImageKit expects: HMAC-SHA1 of token + expiry with the private key
-app.get('/imagekit-auth', authMiddleware, aiLimiter, function (req, res) {
-    if (!imagekitConfigured) {
-        return res.status(503).send("Resume upload is not configured");
-    }
-    const token = crypto.randomUUID();
-    const expire = Math.floor(Date.now() / 1000) + 30 * 60;
-    const signature = crypto.createHmac('sha1', process.env.IMAGEKIT_PRIVATE_KEY).update(token + expire).digest('hex');
-    res.json({ token, expire, signature });
+// Anything a route did not handle itself: malformed or oversized bodies, and unexpected errors
+// eslint-disable-next-line no-unused-vars
+app.use((error, req, res, next) => {
+  if (error.type === 'entity.too.large') {
+    return res.status(413).json({ error: 'That file or request is too large.', code: 'TOO_LARGE' });
+  }
+  if (error.type === 'entity.parse.failed' || error.status === 400) {
+    return res.status(400).json({ error: 'The request could not be read.', code: 'BAD_REQUEST' });
+  }
+  sendError(res, error, `Unhandled error on ${req.method} ${req.path}`);
 });
 
 // ─── HTTP + Socket.IO server ───────────────────────────────────────────────────
@@ -524,6 +564,21 @@ io.use((socket, next) => {
   }
 });
 
+// Limits per signed-in user across all their connections; reconnecting does not reset them
+const MAX_SOCKETS_PER_USER = 5;
+const MAX_SOCKET_EVENTS_PER_MINUTE = 60;   // a real interview sends a handful
+const socketUsage = new Map();             // userId -> { sockets, events, windowStart }
+
+function usageFor(userId) {
+  if (!socketUsage.has(userId)) socketUsage.set(userId, { sockets: 0, events: 0, windowStart: Date.now() });
+  return socketUsage.get(userId);
+}
+
+io.use((socket, next) => {
+  if (usageFor(socket.userId).sockets >= MAX_SOCKETS_PER_USER) return next(new Error('too many connections'));
+  next();
+});
+
 // Runs a session action and answers the client's acknowledgement with the new interview state
 async function respond(reply, context, action) {
   const ack = typeof reply === 'function' ? reply : () => {};
@@ -545,14 +600,28 @@ io.on('connection', (socket) => {
   metrics.websocket.totalSessions++;
   if (metrics.websocket.connected > metrics.websocket.peak) metrics.websocket.peak = metrics.websocket.connected;
 
-  // At most 30 events a minute per connection; a real interview sends a handful
-  let eventCount = 0;
-  const eventWindow = setInterval(() => { eventCount = 0; }, 60 * 1000);
+  const usage = usageFor(socket.userId);
+  usage.sockets++;
   socket.use((packet, next) => {
-    if (++eventCount > 30) return next(new Error('rate limited'));
+    const now = Date.now();
+    if (now - usage.windowStart >= 60 * 1000) {
+      usage.windowStart = now;
+      usage.events = 0;
+    }
+    if (++usage.events > MAX_SOCKET_EVENTS_PER_MINUTE) {
+      // Answer the event instead of dropping it, or the page would wait for a reply for ever
+      const reply = packet[packet.length - 1];
+      if (typeof reply === 'function') {
+        reply({ ok: false, code: 'RATE_LIMITED', error: 'You are sending too fast. Wait a moment and try again.' });
+      }
+      return;
+    }
     next();
   });
-  socket.on('disconnect', () => clearInterval(eventWindow));
+  socket.on('disconnect', () => {
+    usage.sockets--;
+    if (usage.sockets <= 0) socketUsage.delete(socket.userId);
+  });
 
   // Each event is acknowledged with { ok, state } — the full interview state as stored on the
   // server — so the client can always redraw from it, including after a refresh or reconnect.
@@ -566,7 +635,11 @@ io.on('connection', (socket) => {
   // Payload: { interviewId, text }
   socket.on('interview:answer', (payload, reply) => {
     respond(reply, 'interview:answer', async () => {
-      const state = await submitAnswer(payload?.interviewId, socket.userId, payload?.text);
+      // The reply is sent a sentence at a time as it is written, then once more, whole, in the state
+      const interviewId = toInterviewId(payload?.interviewId);
+      const state = await submitAnswer(interviewId, socket.userId, payload?.text, (text) => {
+        socket.emit('interview:reply-chunk', { interviewId, text });
+      });
       if (state.status === 'ended') metrics.interviews.finished++;
       return state;
     });
@@ -592,5 +665,4 @@ httpServer.listen(PORT, () => {
     console.log(`Server Running on port ${PORT} (HTTP + WebSocket)`);
     console.log(`AI provider: ${describeProvider()}`);
     if (!mailConfigured) console.warn('SMTP_USER / SMTP_PASS are not set: user feedback is saved but not emailed.');
-    if (!imagekitConfigured) console.warn('ImageKit keys are not set: resume upload is disabled (manual entry still works).');
 });

@@ -13,11 +13,12 @@ const {
   generateFeedback
 } = require('./aiService');
 const {
-  assertCanStartInterview,
+  toInterviewId,
   loadSession,
   appendMessage,
   deleteMessage,
-  markStarted,
+  startInterview,
+  unstartInterview,
   saveResumeText,
   addUsage,
   endInterview,
@@ -25,7 +26,8 @@ const {
   saveRun,
   saveUnevaluatedCode,
   markCodingSkipped,
-  saveFeedback
+  saveFeedback,
+  listQuestions
 } = require('./interviewService');
 const {
   INTERVIEW_MINUTES,
@@ -48,7 +50,7 @@ const answering = new Set(); // interviewIds with a reply being generated
 // Runs one operation per interview at a time, so a refresh, a double click or a second tab
 // can never trigger a duplicate model call or read a half-written turn.
 function withInterviewLock(interviewId, task) {
-  const key = Number(interviewId);
+  const key = toInterviewId(interviewId);
   const run = (locks.get(key) || Promise.resolve()).then(task);
   const tail = run.catch(() => {});
   locks.set(key, tail);
@@ -56,6 +58,11 @@ function withInterviewLock(interviewId, task) {
     if (locks.get(key) === tail) locks.delete(key);
   });
   return run;
+}
+
+// A call that failed after the model had already answered (unusable JSON, say) was still paid for
+async function recordFailedCall(interviewId, error) {
+  if (error?.usage) await addUsage(interviewId, error.usage);
 }
 
 function countAnswers(interview) {
@@ -125,8 +132,8 @@ async function joinInterview(interviewId, userId) {
 /**
  * Record the candidate's answer and generate the interviewer's reply: exactly one model call.
  */
-async function submitAnswer(interviewId, userId, rawText) {
-  const key = Number(interviewId);
+async function submitAnswer(interviewId, userId, rawText, onReplyChunk) {
+  const key = toInterviewId(interviewId);
   const text = String(rawText || '').trim().slice(0, MAX_ANSWER_CHARS);
   if (!text) throw new AppError(400, 'EMPTY_ANSWER', 'Your answer is empty.');
   if (answering.has(key)) {
@@ -147,8 +154,7 @@ async function submitAnswer(interviewId, userId, rawText) {
 
       // The first answer starts the clock and uses up one of the user's interviews
       const firstAnswer = !interview.startedAt;
-      if (firstAnswer) await assertCanStartInterview(userId);
-      const startedAt = interview.startedAt || new Date();
+      const startedAt = interview.startedAt || await startInterview(interview.id, userId);
 
       const answerNumber = countAnswers(interview) + 1;
       const msLeft = startedAt.getTime() + DURATION_MS - Date.now();
@@ -162,7 +168,11 @@ async function submitAnswer(interviewId, userId, rawText) {
         reply = await generateInterviewReply({
           resumeText,
           jobDescription: interview.jobDescription,
+          level: interview.level,
           history: [...interview.messages, answer],
+          // Each finished sentence goes to the candidate straight away, so the interviewer
+          // starts talking before the whole reply has been generated
+          onSentence: onReplyChunk,
           turnNote: interviewTurnNote({
             answerNumber,
             maxAnswers: MAX_ANSWERS,
@@ -171,14 +181,14 @@ async function submitAnswer(interviewId, userId, rawText) {
           })
         });
       } catch {
-        // Leave the transcript as it was so the same answer can simply be sent again
+        // Leave everything as it was so the same answer can simply be sent again
         await deleteMessage(answer.id);
+        if (firstAnswer) await unstartInterview(interview.id);
         throw new AppError(502, 'AI_UNAVAILABLE', 'The interviewer could not reply. Please send your answer again.');
       }
 
       await appendMessage(interview.id, 'ai', reply.text);
       await addUsage(interview.id, reply.usage);
-      if (firstAnswer) await markStarted(interview.id, startedAt);
       if (final || reply.ended) await endInterview(interview.id);
 
       return buildState(await loadSession(interviewId, userId));
@@ -223,9 +233,18 @@ function toChallengeView(challenge) {
   };
 }
 
+// The coding round belongs to an interview that was actually held: started (so it counts
+// against the user's allowance) and finished. Otherwise creating interviews and going straight
+// to the coding round would be a way to spend model calls without ever using one up.
 function assertCodingOpen(interview) {
   if (interview.feedback) {
     throw new AppError(409, 'INTERVIEW_COMPLETED', 'This interview already has its feedback.');
+  }
+  if (!interview.startedAt) {
+    throw new AppError(409, 'INTERVIEW_NOT_HELD', 'Answer at least one interview question before the coding round.');
+  }
+  if (!interview.endedAt) {
+    throw new AppError(409, 'INTERVIEW_IN_PROGRESS', 'Finish the interview before the coding round.');
   }
 }
 
@@ -241,8 +260,9 @@ async function getOrCreateChallenge(interviewId, userId) {
 
     let generated;
     try {
-      generated = await generateCodingChallenge((await ensureResumeText(interview)) || interview.jobDescription);
-    } catch {
+      generated = await generateCodingChallenge((await ensureResumeText(interview)) || interview.jobDescription, interview.level);
+    } catch (error) {
+      await recordFailedCall(interview.id, error);
       throw new AppError(502, 'AI_UNAVAILABLE', 'Could not generate a coding challenge. Please try again.');
     }
     await addUsage(interview.id, generated.usage);
@@ -278,7 +298,8 @@ async function runCode(interviewId, userId, { code, language }) {
     let evaluated;
     try {
       evaluated = await evaluateCode(source, lang || challenge.language, challenge);
-    } catch {
+    } catch (error) {
+      await recordFailedCall(interview.id, error);
       throw new AppError(502, 'AI_UNAVAILABLE', 'Could not evaluate your code. Please try again.');
     }
     await addUsage(interview.id, evaluated.usage);
@@ -307,7 +328,9 @@ async function submitCode(interviewId, userId, { code }) {
 async function skipCoding(interviewId, userId) {
   return withInterviewLock(interviewId, async () => {
     const interview = await loadSession(interviewId, userId);
-    assertCodingOpen(interview);
+    if (interview.feedback) {
+      throw new AppError(409, 'INTERVIEW_COMPLETED', 'This interview already has its feedback.');
+    }
     await markCodingSkipped(interview.id);
     return { skipped: true };
   });
@@ -330,16 +353,21 @@ const TOO_SHORT_FEEDBACK = {
  * round, then served from the database, so the scores cannot be set by the client and
  * reloading the page never pays for a second analysis.
  */
+// The report plus the interview's questions, each with the note written about its answer
+async function withQuestions(feedback) {
+  return { feedback, questions: await listQuestions(feedback.interviewId) };
+}
+
 async function getOrCreateFeedback(interviewId, userId) {
   return withInterviewLock(interviewId, async () => {
     const interview = await loadSession(interviewId, userId);
-    if (interview.feedback) return interview.feedback;
+    if (interview.feedback) return withQuestions(interview.feedback);
     if (!interview.endedAt) {
       throw new AppError(409, 'INTERVIEW_IN_PROGRESS', 'Finish the interview before asking for feedback.');
     }
 
     if (countAnswers(interview) < MIN_ANSWERS_FOR_FEEDBACK) {
-      return saveFeedback(interview.id, TOO_SHORT_FEEDBACK);
+      return withQuestions(await saveFeedback(interview.id, TOO_SHORT_FEEDBACK));
     }
 
     const challenge = interview.codingChallenge;
@@ -354,11 +382,12 @@ async function getOrCreateFeedback(interviewId, userId) {
     let generated;
     try {
       generated = await generateFeedback(interview.messages, coding);
-    } catch {
+    } catch (error) {
+      await recordFailedCall(interview.id, error);
       throw new AppError(502, 'AI_UNAVAILABLE', 'Could not analyse the interview. Please try again.');
     }
     await addUsage(interview.id, generated.usage);
-    return saveFeedback(interview.id, generated.feedback);
+    return withQuestions(await saveFeedback(interview.id, generated.feedback));
   });
 }
 

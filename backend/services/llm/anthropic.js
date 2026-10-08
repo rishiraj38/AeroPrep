@@ -1,6 +1,8 @@
 const Anthropic = require('@anthropic-ai/sdk');
 
-const TIMEOUT_MS = 60000;
+// One retry at most: every attempt is held inside the interview's lock while the candidate waits,
+// and a retried call that was merely slow is paid for twice
+const MAX_RETRIES = 1;
 const EPHEMERAL = { type: 'ephemeral' };
 
 // With `cache`, the system prompt and the conversation so far are marked as a reusable prefix,
@@ -13,14 +15,14 @@ function buildMessages(messages, turnNote, cache) {
   return [...messages.slice(0, -1), { role: last.role, content }];
 }
 
-function createAnthropicProvider({ apiKey, model, baseURL, effort }) {
+function createAnthropicProvider({ apiKey, baseURL, effort }) {
   const client = new Anthropic({
     ...(apiKey ? { apiKey } : {}),
     ...(baseURL ? { baseURL } : {}),
-    timeout: TIMEOUT_MS,
+    maxRetries: MAX_RETRIES,
   });
 
-  return async function complete({ system, messages, turnNote, cache, maxTokens }) {
+  return async function complete({ model, system, messages, turnNote, cache, maxTokens, onText, timeoutMs }) {
     const params = { model, max_tokens: maxTokens, messages: buildMessages(messages, turnNote, cache) };
     if (system) {
       params.system = cache ? [{ type: 'text', text: system, cache_control: EPHEMERAL }] : system;
@@ -29,7 +31,16 @@ function createAnthropicProvider({ apiKey, model, baseURL, effort }) {
 
     let response;
     try {
-      response = await client.messages.create(params);
+      if (onText) {
+        // Streamed: text reaches the caller sentence by sentence instead of all at the end
+        const stream = client.messages.stream(params, { timeout: timeoutMs });
+        stream.on('text', (delta) => {
+          try { onText(delta); } catch (error) { console.error('onText handler failed:', error.message); }
+        });
+        response = await stream.finalMessage();
+      } else {
+        response = await client.messages.create(params, { timeout: timeoutMs });
+      }
     } catch (error) {
       if (error instanceof Anthropic.AuthenticationError) {
         throw new Error('Anthropic rejected the API key. Check AI_API_KEY.');

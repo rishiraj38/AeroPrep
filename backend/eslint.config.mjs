@@ -18,6 +18,7 @@ export default [
                 AbortController: "readonly",
                 URL: "readonly",
                 AbortSignal: "readonly",
+                TextDecoder: "readonly",
                 module: "readonly",
                 require: "readonly",
                 exports: "readonly",

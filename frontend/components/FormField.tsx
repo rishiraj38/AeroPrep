@@ -1,8 +1,8 @@
 import React, { useState } from "react";
 import { Eye, EyeOff } from "lucide-react";
-import { FormControl, FormItem, FormLabel, FormMessage } from "./ui/form";
+import { FormControl, FormDescription, FormField as Field, FormItem, FormLabel, FormMessage } from "./ui/form";
 import { Input } from "./ui/input";
-import { Control, Controller, FieldValues, Path } from "react-hook-form";
+import { Control, FieldValues, Path } from "react-hook-form";
 
 interface FormFieldProps<T extends FieldValues> {
   control: Control<T>;
@@ -11,6 +11,7 @@ interface FormFieldProps<T extends FieldValues> {
   placeholder?: string;
   type?: "text" | "email" | "password" | "file";
   autoComplete?: string;
+  hint?: string;
 }
 
 const FormField = <T extends FieldValues>({
@@ -20,12 +21,15 @@ const FormField = <T extends FieldValues>({
   placeholder,
   type = "text",
   autoComplete,
+  hint,
 }: FormFieldProps<T>) => {
   const [showPassword, setShowPassword] = useState(false);
   const isPassword = type === "password";
 
   return (
-    <Controller
+    // The wrapper from ui/form is what tells FormLabel, FormControl and FormMessage which
+    // field they belong to; without it validation errors are never shown
+    <Field
       control={control}
       name={name}
       render={({ field }) => (
@@ -52,6 +56,7 @@ const FormField = <T extends FieldValues>({
               </button>
             )}
           </div>
+          {hint && <FormDescription className="text-xs text-light-400">{hint}</FormDescription>}
           <FormMessage />
         </FormItem>
       )}

@@ -24,7 +24,7 @@ async function sendFeedbackEmail(feedback) {
       from: `AeroPrep <${process.env.SMTP_USER}>`,
       to: SUPPORT_EMAIL,
       replyTo: feedback.user.email,
-      subject: `AeroPrep feedback: ${feedback.rating}/5 from ${feedback.user.name}`,
+      subject: `AeroPrep feedback: ${feedback.rating}/5 from ${feedback.user.name}`.replace(/[\r\n]+/g, ' '),
       text: [
         `Rating: ${feedback.rating}/5`,
         `From: ${feedback.user.name} <${feedback.user.email}>`,

@@ -17,6 +17,7 @@ export function AccordionItem({ title, children, isOpen, onToggle }: AccordionIt
     <div className="border-b border-border/50">
       <button
         onClick={onToggle}
+        aria-expanded={!!isOpen}
         className="flex w-full items-center justify-between py-4 text-left font-medium transition-all hover:text-primary"
       >
         {title}

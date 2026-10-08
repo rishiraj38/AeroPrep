@@ -7,7 +7,7 @@ import { isAuthenticated } from '@/lib/auth';
 import { getCurrentInterviewId } from '@/lib/currentInterview';
 import { Button } from '@/components/ui/button';
 import { useRouter } from 'next/navigation';
-import { AlertTriangle, Play, CheckCircle, XCircle, Keyboard, Loader2 } from 'lucide-react';
+import { AlertTriangle, Play, CheckCircle, XCircle, Keyboard, Loader2, Info } from 'lucide-react';
 
 const SUPPORTED_LANGUAGES = [
   { value: 'javascript', label: 'JavaScript' },
@@ -95,51 +95,41 @@ export default function CodingRoundPage() {
   const [runError, setRunError] = useState('');
   const [selectedLanguage, setSelectedLanguage] = useState('javascript');
   const [isNavigating, setIsNavigating] = useState(false);
+  // Which irreversible action is being confirmed, if any
+  const [confirming, setConfirming] = useState<'finish' | 'skip' | null>(null);
 
-  // Resizable Output State
+  // Resizable Output State (wide screens; on a phone the page simply scrolls)
   const [outputHeight, setOutputHeight] = useState(300);
   const [isDragging, setIsDragging] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Resize Handlers
+  // Resize Handlers. Pointer events, so the handle works with a finger or a pen as well as a mouse.
   useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!isDragging || !containerRef.current) return;
+    if (!isDragging) return;
 
+    const handleMove = (e: PointerEvent) => {
+      if (!containerRef.current) return;
       const containerRect = containerRef.current.getBoundingClientRect();
       const newHeight = containerRect.bottom - e.clientY;
 
       // Clamp height: Min 40px, Max 85% of container height
       const maxHeight = containerRect.height * 0.85;
-
-      // Use clamping instead of conditional updated to avoid "stuck" feeling
-      const clampedHeight = Math.max(40, Math.min(newHeight, maxHeight));
-      setOutputHeight(clampedHeight);
+      setOutputHeight(Math.max(40, Math.min(newHeight, maxHeight)));
     };
 
-    const handleMouseUp = () => {
-      setIsDragging(false);
-      document.body.style.cursor = 'default';
-    };
+    const handleUp = () => setIsDragging(false);
 
-    if (isDragging) {
-      window.addEventListener('mousemove', handleMouseMove);
-      window.addEventListener('mouseup', handleMouseUp);
-      document.body.style.cursor = 'row-resize';
-    }
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+    document.body.style.cursor = 'row-resize';
 
     return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
       document.body.style.cursor = 'default';
     };
   }, [isDragging]);
-
-  const startResizing = (e: React.MouseEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
-  };
 
   // The challenge is generated once and stored with the interview, so loading it again
   // (a refresh, a retry) always shows the same problem.
@@ -154,13 +144,18 @@ export default function CodingRoundPage() {
       setChallenge(data);
 
       const draft = readDraft(id);
-      const language = draft?.language || (BOILERPLATES[data.language] ? data.language : 'javascript');
+      const language = draft?.language || data.language || 'javascript';
       setSelectedLanguage(language);
       // Unsaved edits first, then the last submitted code, then the starter
-      setCode(draft?.code ?? data.userCode ?? (formatContent(data.starterCode) || BOILERPLATES[language]));
+      setCode(draft?.code ?? data.userCode ?? (formatContent(data.starterCode) || BOILERPLATES[language] || ''));
     } catch (error: any) {
       if (error instanceof ApiError && error.code === 'INTERVIEW_COMPLETED') {
         router.replace('/interview/feedback');
+        return;
+      }
+      // The interview itself is not finished yet: that is where to go
+      if (error instanceof ApiError && error.code === 'INTERVIEW_IN_PROGRESS') {
+        router.replace('/interview/session');
         return;
       }
       console.error('Failed to load challenge:', error);
@@ -188,29 +183,35 @@ export default function CodingRoundPage() {
     saveDraft(value, selectedLanguage);
   };
 
+  // True while the editor still holds a starter the candidate has not touched
+  const untouched = !code.trim()
+    || Object.values(BOILERPLATES).includes(code)
+    || code === formatContent(challenge?.starterCode);
+
   // Swap in the new language's boilerplate, unless the candidate has started writing
   const handleLanguageChange = (language: string) => {
-    const untouched = !code.trim()
-      || Object.values(BOILERPLATES).includes(code)
-      || code === formatContent(challenge?.starterCode);
     const nextCode = untouched ? (BOILERPLATES[language] || "// Write your solution here") : code;
     setSelectedLanguage(language);
     setCode(nextCode);
     saveDraft(nextCode, language);
   };
 
-  const handleRun = async () => {
+  // Returns the checked challenge, or null if the check could not be made
+  const check = async (): Promise<CodingChallenge | null> => {
       const id = interviewIdRef.current;
-      if (!id || !challenge || evaluating) return;
+      if (!id || !challenge || evaluating) return null;
       setEvaluating(true);
       setRunError('');
        // Ensure output window is visible when running
       if (outputHeight < 100) setOutputHeight(300);
       try {
-          setChallenge(await runCode(id, code, selectedLanguage));
+          const checked = await runCode(id, code, selectedLanguage);
+          setChallenge(checked);
+          return checked;
       } catch (error: any) {
           console.error("Evaluation failed", error);
-          setRunError(error.message || 'Evaluation failed. Please try again.');
+          setRunError(error.message || 'The check failed. Please try again.');
+          return null;
       } finally {
           setEvaluating(false);
       }
@@ -222,11 +223,14 @@ export default function CodingRoundPage() {
     router.push('/interview/feedback');
   };
 
-  const handleFinish = async () => {
+  const finish = async (checkFirst: boolean) => {
      const id = interviewIdRef.current;
      if (!id || isNavigating) return;
+     setConfirming(null);
      setIsNavigating(true);
      try {
+         // A failed check does not stop the candidate from finishing; the code is still saved
+         if (checkFirst) await check();
          await submitCode(id, code);
          goToFeedback();
      } catch (error: any) {
@@ -235,9 +239,10 @@ export default function CodingRoundPage() {
      }
   };
 
-  const handleSkip = async () => {
+  const skip = async () => {
      const id = interviewIdRef.current;
      if (!id || isNavigating) return;
+     setConfirming(null);
      setIsNavigating(true);
      try {
          await skipCoding(id);
@@ -252,10 +257,10 @@ export default function CodingRoundPage() {
   // --- RENDER: LOADING / ERROR STATE ---
   if (loading) {
       return (
-        <div className="min-h-screen flex flex-col items-center justify-center p-10 text-center">
-          <Loader2 className="h-12 w-12 animate-spin text-primary mb-4" />
-          <p className="text-lg font-medium">Preparing your coding challenge...</p>
-          <p className="text-sm text-muted-foreground mt-2">(AI is analysing your resume to create a relevant problem)</p>
+        <div role="status" className="min-h-screen flex flex-col items-center justify-center p-10 text-center">
+          <Loader2 className="h-12 w-12 animate-spin text-primary-200 mb-4" />
+          <p className="text-lg font-medium text-white">Preparing your coding challenge...</p>
+          <p className="text-sm text-muted-foreground mt-2">This takes a few seconds.</p>
         </div>
       );
   }
@@ -264,11 +269,11 @@ export default function CodingRoundPage() {
       return (
         <div className="min-h-screen flex flex-col items-center justify-center p-10 text-center">
            <AlertTriangle className="h-12 w-12 text-red-500 mb-4" />
-           <h2 className="text-xl font-bold mb-2">Failed to Load Challenge</h2>
-           <p className="text-muted-foreground mb-6">{loadError || "We couldn't generate a coding problem for you at this time."}</p>
-           <div className="flex gap-4">
-             <Button onClick={handleSkip} variant="outline" disabled={isNavigating} className="cursor-pointer">Skip &amp; View Feedback</Button>
-             <Button onClick={loadChallenge} disabled={isNavigating} className="btn-primary cursor-pointer">Try Again</Button>
+           <h2 className="text-xl font-bold mb-2">We could not load a coding challenge</h2>
+           <p role="alert" className="text-muted-foreground mb-6">{loadError || "Something went wrong while preparing your problem."}</p>
+           <div className="flex flex-wrap justify-center gap-4">
+             <Button onClick={skip} variant="outline" disabled={isNavigating} className="cursor-pointer">Skip &amp; View Feedback</Button>
+             <Button onClick={loadChallenge} disabled={isNavigating} className="cursor-pointer">Try Again</Button>
            </div>
         </div>
       );
@@ -276,12 +281,20 @@ export default function CodingRoundPage() {
 
   const output = challenge.result;
   const runsLeft = challenge.runsLeft;
+  // The review on screen belongs to the code as it was when it was checked
+  const stale = !!output && code !== challenge.userCode;
+  const passedAsIs = !!output?.passed && !stale;
+  // Finishing with code the AI has not looked at is allowed, but asked about first
+  const unchecked = !untouched && (!output || stale);
+  const languages = SUPPORTED_LANGUAGES.some((lang) => lang.value === selectedLanguage)
+    ? SUPPORTED_LANGUAGES
+    : [...SUPPORTED_LANGUAGES, { value: selectedLanguage, label: selectedLanguage }];
 
   // --- RENDER: CODING INTERFACE ---
   return (
     <div className="min-h-screen bg-background flex flex-col md:flex-row">
       {/* Left Panel: Problem Statement */}
-      <div className="w-full md:w-1/3 p-6 border-r border-border overflow-y-auto h-[40vh] md:h-screen">
+      <div className="w-full md:w-1/3 p-6 border-b md:border-b-0 md:border-r border-border overflow-y-auto max-h-[45vh] md:max-h-none md:h-screen">
           <div className="flex justify-between items-center mb-6">
             <div className="text-sm font-medium text-muted-foreground">
                 Coding Challenge
@@ -289,9 +302,9 @@ export default function CodingRoundPage() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={handleSkip}
+              onClick={() => setConfirming('skip')}
               disabled={isNavigating}
-              className="text-muted-foreground hover:text-red-500 cursor-pointer"
+              className="text-muted-foreground hover:text-red-400 cursor-pointer"
             >
               Skip
             </Button>
@@ -301,19 +314,19 @@ export default function CodingRoundPage() {
 
           <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 mb-6">
             <div className="flex items-start gap-2">
-                <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-                <p className="text-xs text-amber-600 dark:text-amber-400">
-                  <strong>AI Evaluation:</strong> Your code is analyzed for logic and correctness, not just execution.
+                <Info className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
+                <p className="text-xs text-amber-300">
+                  <strong>How checking works:</strong> an AI reads your code and judges whether it solves the problem. Your code is not run, so treat the result as a review, not a test report.
                 </p>
             </div>
           </div>
 
-          <div className="prose dark:prose-invert max-w-none text-sm">
+          <div className="max-w-none text-sm">
               <p className="mb-4 text-base">{formatContent(challenge.description)}</p>
 
               <div className="bg-muted p-4 rounded-md mb-4 border border-border">
                   <h3 className="font-semibold mb-2">Problem Statement</h3>
-                  <div className="whitespace-pre-wrap font-mono text-xs">{formatContent(challenge.problemStatement)}</div>
+                  <div className="whitespace-pre-wrap font-mono text-sm text-foreground">{formatContent(challenge.problemStatement)}</div>
               </div>
 
               <h3 className="font-semibold mt-4 mb-2">Constraints</h3>
@@ -324,7 +337,7 @@ export default function CodingRoundPage() {
               <h3 className="font-semibold mt-4 mb-2">Example Cases</h3>
               <div className="space-y-2">
                   {challenge.testCases.length > 0 ? challenge.testCases.map((tc, i) => (
-                      <div key={i} className="bg-muted/50 p-2 rounded border border-border font-mono text-xs">
+                      <div key={i} className="bg-muted/50 p-2 rounded border border-border font-mono text-sm">
                           <span className="text-muted-foreground">In:</span> {formatContent(tc.input)} <br/>
                           <span className="text-muted-foreground">Out:</span> {formatContent(tc.expectedOutput)}
                       </div>
@@ -335,46 +348,47 @@ export default function CodingRoundPage() {
           </div>
       </div>
 
-      {/* Right Panel: Editor & Output */}
-      <div ref={containerRef} className="w-full md:w-2/3 flex flex-col h-[60vh] md:h-screen overflow-hidden">
+      {/* Right Panel: Editor & Output. On a phone it is as tall as it needs and the page scrolls. */}
+      <div ref={containerRef} className="w-full md:w-2/3 flex flex-col md:h-screen md:overflow-hidden">
           {/* Toolbar */}
-          <div className="bg-muted/30 border-b border-border px-4 py-2 flex items-center justify-between gap-4">
+          <div className="bg-muted/30 border-b border-border px-4 py-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
             <div className="flex items-center gap-3">
-                <label className="text-sm font-medium text-muted-foreground">Language:</label>
+                <label htmlFor="language" className="text-sm font-medium text-muted-foreground">Language:</label>
                 <select
+                  id="language"
                   value={selectedLanguage}
                   onChange={(e) => handleLanguageChange(e.target.value)}
-                  className="bg-background text-foreground px-3 py-1.5 rounded-md text-sm border border-border focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
+                  className="bg-background text-foreground px-3 py-1.5 rounded-md text-sm border border-border cursor-pointer"
                 >
-                  {SUPPORTED_LANGUAGES.map((lang) => (
+                  {languages.map((lang) => (
                     <option key={lang.value} value={lang.value}>{lang.label}</option>
                   ))}
                 </select>
             </div>
 
-            <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground hidden sm:inline">
-                  {runsLeft} {runsLeft === 1 ? 'run' : 'runs'} left
+            <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs text-muted-foreground">
+                  {runsLeft === 0 ? 'No checks left' : `${runsLeft} ${runsLeft === 1 ? 'check' : 'checks'} left`}
                 </span>
                 <Button
-                  onClick={handleRun}
+                  onClick={check}
                   disabled={evaluating || isNavigating || runsLeft === 0}
                   size="sm"
                   className="cursor-pointer"
                 >
                     {evaluating ? (
-                        <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Analyzing...</>
+                        <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Checking...</>
                     ) : (
-                        <><Play className="mr-2 h-4 w-4" /> Run & Check</>
+                        <><Play className="mr-2 h-4 w-4" /> Check my code</>
                     )}
                 </Button>
 
                 <Button
-                  onClick={handleFinish}
-                  variant={output?.passed ? "default" : "secondary"} // Highlight if passed
+                  onClick={() => (unchecked && runsLeft > 0 ? setConfirming('finish') : finish(false))}
+                  variant={passedAsIs ? "default" : "secondary"} // Highlight if passed
                   size="sm"
                   disabled={isNavigating || evaluating}
-                  className={`cursor-pointer ${output?.passed ? 'bg-green-600 hover:bg-green-700 text-white' : ''}`}
+                  className={`cursor-pointer ${passedAsIs ? 'bg-green-600 hover:bg-green-700 text-white' : ''}`}
                 >
                     {isNavigating ? (
                         <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving...</>
@@ -386,7 +400,7 @@ export default function CodingRoundPage() {
           </div>
 
           {/* Editor */}
-          <div className={`flex-1 relative min-h-0 overflow-hidden ${isDragging ? 'pointer-events-none select-none' : ''}`}>
+          <div className={`h-[50vh] md:h-auto md:flex-1 relative min-h-0 overflow-hidden ${isDragging ? 'pointer-events-none select-none' : ''}`}>
               <Editor
                 height="100%"
                 language={selectedLanguage}
@@ -401,39 +415,46 @@ export default function CodingRoundPage() {
                 }}
               />
           </div>
+          <p className="sr-only">To leave the editor with the keyboard, press Control M (Control Shift M on a Mac) and then Tab.</p>
 
-          {/* Drag Handle */}
+          {/* Drag Handle (wide screens) */}
           <div
-            className="h-2 bg-border hover:bg-primary/50 cursor-row-resize flex items-center justify-center transition-colors group"
-            onMouseDown={startResizing}
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize the review panel"
+            className="hidden md:flex h-3 bg-border hover:bg-primary/50 cursor-row-resize items-center justify-center transition-colors group touch-none"
+            onPointerDown={(e) => { e.preventDefault(); setIsDragging(true); }}
           >
             <div className="w-12 h-1 rounded-full bg-muted-foreground/30 group-hover:bg-primary/70" />
           </div>
 
-          {/* Output Console */}
+          {/* Review panel */}
           <div
-            style={{ height: outputHeight }}
-            className={`transition-none border-t border-border bg-slate-950 p-4 overflow-y-auto`}
+            style={{ ['--review-height' as any]: `${outputHeight}px` }}
+            className="transition-none border-t border-border bg-slate-950 p-4 overflow-y-auto min-h-40 max-h-72 md:max-h-none md:h-[var(--review-height)]"
           >
               {runError && (
-                  <div className="mb-3 text-sm text-amber-400 flex items-center gap-2">
+                  <div role="alert" className="mb-3 text-sm text-amber-400 flex items-center gap-2">
                       <AlertTriangle className="h-4 w-4 shrink-0" /> {runError}
                   </div>
               )}
 
               {!output && !runError && (
-                  <div className="text-center text-xs text-muted-foreground pt-1 flex items-center justify-center gap-2 h-full">
-                      <Keyboard className="h-4 w-4" /> <span>Write your code and click Run to test</span>
+                  <div className="text-center text-sm text-muted-foreground pt-1 flex items-center justify-center gap-2 h-full">
+                      <Keyboard className="h-4 w-4" /> <span>Write your code, then press &quot;Check my code&quot; for an AI review</span>
                   </div>
               )}
 
               {output && (
-                  <div className={`text-sm font-mono ${output.passed ? "text-green-400" : "text-red-400"}`}>
+                  <div role="status" className={`text-sm font-mono ${stale ? 'opacity-60' : ''} ${output.passed ? "text-green-400" : "text-red-400"}`}>
+                      {stale && (
+                          <p className="mb-3 font-sans text-amber-300">This review is for an earlier version of your code. Check again to review what you have now.</p>
+                      )}
                       <div className="flex items-center gap-2 mb-2">
                           <span className="text-lg">
                             {output.passed ? <CheckCircle className="h-6 w-6" /> : <XCircle className="h-6 w-6" />}
                           </span>
-                          <span className="font-bold">{output.passed ? "All Test Cases Passed!" : "Execution Failed / Tests Failed"}</span>
+                          <span className="font-bold">{output.passed ? "The AI review found no problems" : "The AI review found problems"}</span>
                       </div>
 
                       <p className="whitespace-pre-wrap mb-4 text-foreground/80">{output.feedback}</p>
@@ -441,9 +462,9 @@ export default function CodingRoundPage() {
                       {output.testResults?.length > 0 && (
                           <div className="space-y-1 bg-black/20 p-2 rounded">
                               {output.testResults.map((res, i) => (
-                                  <div key={i} className={`flex gap-2 ${res.passed ? "text-green-500" : "text-red-500"}`}>
-                                      <span className="w-16 shrink-0">Test {i+1}:</span>
-                                      <span>{res.passed ? "PASS" : `FAIL (Expected: ${res.expected}, Got: ${res.actual})`}</span>
+                                  <div key={i} className={`flex gap-2 ${res.passed ? "text-green-500" : "text-red-400"}`}>
+                                      <span className="shrink-0 whitespace-nowrap">Example {i+1}:</span>
+                                      <span>{res.passed ? "looks right" : `looks wrong (expected ${res.expected}, the AI predicts ${res.actual})`}</span>
                                   </div>
                               ))}
                           </div>
@@ -452,6 +473,36 @@ export default function CodingRoundPage() {
               )}
           </div>
       </div>
+
+      {/* Finishing and skipping cannot be undone, so both are confirmed */}
+      {confirming && (
+        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4" onClick={() => setConfirming(null)}>
+          <div role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-text"
+            onClick={(e) => e.stopPropagation()}
+            className="max-w-sm w-full bg-card border border-border rounded-xl p-6 shadow-2xl">
+            <h2 id="confirm-title" className="text-xl font-bold mb-2">
+              {confirming === 'skip' ? 'Skip the coding round?' : 'Finish without a check?'}
+            </h2>
+            <p id="confirm-text" className="text-sm text-muted-foreground mb-6">
+              {confirming === 'skip'
+                ? 'You will go straight to your report and cannot come back to this challenge.'
+                : 'Your code has changed since it was last checked, so your report would treat it as unchecked. You can have it checked first.'}
+            </p>
+            <div className="flex flex-col gap-3">
+              {confirming === 'finish' && (
+                <Button autoFocus onClick={() => finish(true)} className="cursor-pointer">Check it, then finish</Button>
+              )}
+              <Button onClick={() => (confirming === 'skip' ? skip() : finish(false))}
+                variant="secondary" className="cursor-pointer">
+                {confirming === 'skip' ? 'Skip the coding round' : 'Finish without checking'}
+              </Button>
+              <Button autoFocus={confirming === 'skip'} onClick={() => setConfirming(null)} variant="ghost" className="cursor-pointer">
+                Keep coding
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

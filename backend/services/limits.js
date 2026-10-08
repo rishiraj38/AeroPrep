@@ -10,6 +10,9 @@ module.exports = {
   SUPPORT_EMAIL: process.env.SUPPORT_EMAIL || 'hailhelixnewsform@gmail.com',
   // Interviews a user may start for free (User.interviewLimit overrides it per account)
   FREE_INTERVIEW_LIMIT: positiveInt(process.env.FREE_INTERVIEW_LIMIT, 3),
+  // Interviews that may be started per day across all users. A ceiling on what one bad day
+  // (abuse, or a sudden crowd) can cost; raise it as real usage grows
+  DAILY_INTERVIEW_LIMIT: positiveInt(process.env.DAILY_INTERVIEW_LIMIT, 100),
   // Interview length, counted from the candidate's first answer
   INTERVIEW_MINUTES: positiveInt(process.env.INTERVIEW_MINUTES, 15),
   // Candidate answers per interview; each one costs exactly one model call

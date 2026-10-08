@@ -12,6 +12,8 @@ interface Interview {
   resumeURL: string;
   jobDescription: string | null;
   status: string;
+  startedAt: string | null;
+  endedAt: string | null;
   createdAt: string;
   feedback: {
     totalScore: number;
@@ -20,6 +22,14 @@ interface Interview {
   _count: {
     questions: number;
   };
+}
+
+// Where an interview stands, in words: the stored status only says whether a report exists
+function stageOf(interview: Interview): { label: string; done: boolean } {
+  if (interview.feedback) return { label: 'Completed', done: true };
+  if (interview.endedAt) return { label: 'Ended, no report yet', done: false };
+  if (interview.startedAt) return { label: 'In progress', done: false };
+  return { label: 'Not started', done: false };
 }
 
 export default function InterviewHistoryPage() {
@@ -34,24 +44,27 @@ export default function InterviewHistoryPage() {
       return;
     }
 
-    async function fetchInterviews() {
-      try {
-        const data = await getInterviewHistory();
-        setInterviews(data);
-      } catch (err: any) {
-        setError(err.message);
-      } finally {
-        setLoading(false);
-      }
-    }
-
     fetchInterviews();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function fetchInterviews() {
+    setLoading(true);
+    setError(null);
+    try {
+      setInterviews(await getInterviewHistory());
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
+      <div role="status" className="min-h-screen flex flex-col items-center justify-center gap-4 p-4">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-200"></div>
+        <p className="text-sm">Loading your interviews…</p>
       </div>
     );
   }
@@ -59,8 +72,11 @@ export default function InterviewHistoryPage() {
   if (error) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-4 p-4">
-        <p className="text-red-500 text-center">{error}</p>
-        <Button onClick={() => router.push('/sign-in')} className="cursor-pointer">Sign In</Button>
+        <p role="alert" className="text-red-400 text-center">{error}</p>
+        <div className="flex gap-3">
+          <Button onClick={fetchInterviews} className="cursor-pointer">Try again</Button>
+          <Button asChild variant="secondary" className="cursor-pointer"><Link href="/">Back to dashboard</Link></Button>
+        </div>
       </div>
     );
   }
@@ -102,11 +118,11 @@ export default function InterviewHistoryPage() {
                     <div className="flex-1 min-w-0">
                       <div className="flex flex-wrap items-center gap-2 sm:gap-3 mb-2">
                         <span className={`px-2 py-1 rounded text-xs font-medium ${
-                          interview.status === 'completed' 
+                          stageOf(interview).done
                             ? 'bg-green-500/20 text-green-400' 
-                            : 'bg-yellow-500/20 text-yellow-400'
+                            : 'bg-yellow-500/20 text-yellow-300'
                         }`}>
-                          {interview.status === 'completed' ? 'Completed' : 'In Progress'}
+                          {stageOf(interview).label}
                         </span>
                         <span className="text-xs sm:text-sm text-muted-foreground">
                           {new Date(interview.createdAt).toLocaleDateString('en-US', {

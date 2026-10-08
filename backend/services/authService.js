@@ -12,10 +12,12 @@ const SALT_ROUNDS = 10;
 
 // Register a new user
 async function register(name, email, password) {
-  name = String(name).trim();
-  email = String(email).trim().toLowerCase();
+  // Cut every field down before examining it. The email pattern below takes time that grows
+  // with the square of its input, so it must never see more than a few hundred characters.
+  name = String(name ?? '').slice(0, 200).replace(/\p{Cc}+/gu, ' ').trim();
+  email = String(email ?? '').slice(0, 300).trim().toLowerCase();
   if (name.length < 2 || name.length > 80) throw new Error('Please enter your name.');
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 200) throw new Error('Please enter a valid email.');
+  if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Please enter a valid email.');
   if (typeof password !== 'string' || password.length < 6 || password.length > 200) {
     throw new Error('Password must be at least 6 characters.');
   }
@@ -48,8 +50,8 @@ async function register(name, email, password) {
 
 // Login user and return JWT token
 async function login(email, password) {
-  email = String(email).trim();
-  password = String(password);
+  email = String(email ?? '').slice(0, 300).trim();
+  password = String(password ?? '').slice(0, 300);
 
   // Find user. New accounts are stored lower-cased; older ones may have been saved as typed
   const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } })

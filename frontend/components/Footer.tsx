@@ -1,77 +1,55 @@
 import Link from "next/link";
 import { Logo } from "@/components/Logo";
-import { Github, Twitter, Linkedin } from "lucide-react";
+import { Github, Linkedin, Mail } from "lucide-react";
+import { SUPPORT_EMAIL, supportMailto } from "@/lib/contact";
+
+const LINKS = [
+  { label: "Prep library", href: "/resources" },
+  { label: "Help & support", href: "/help" },
+  { label: "Sign in", href: "/sign-in" },
+  { label: "Create an account", href: "/sign-up" },
+];
 
 export const Footer = () => {
   return (
-    <footer className="relative z-10 border-t border-white/5 bg-black/60 backdrop-blur-md pt-16 pb-8">
-      <div className="max-w-7xl mx-auto px-6">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-12 mb-12">
-          {/* Brand Column */}
-          <div className="md:col-span-1">
+    <footer className="relative z-10 border-t border-white/5 bg-black/60 backdrop-blur-md py-12">
+      <div className="max-w-6xl mx-auto px-6">
+        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-10">
+          <div className="max-w-sm">
             <Link href="/" className="flex items-center gap-2 mb-4">
               <Logo size="sm" />
               <span className="text-2xl font-bold text-white">AeroPrep</span>
             </Link>
             <p className="text-gray-400 text-sm leading-relaxed mb-6">
-              The advanced flight simulator for your technical interview preparation. Master algorithms, system design, and behavioral rounds with AI.
+              Spoken mock interviews with an AI interviewer that has read your resume. An independent project, free to try.
             </p>
             <div className="flex items-center gap-4">
-              <Link href="#" className="p-2 rounded-full bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white transition-colors">
-                <Twitter className="w-4 h-4" />
-              </Link>
-              <Link href="https://github.com/rishiraj38" className="p-2 rounded-full bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white transition-colors">
+              <a href="https://github.com/rishiraj38/AeroPrep" target="_blank" rel="noopener noreferrer" aria-label="AeroPrep on GitHub" className="p-2 rounded-full bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white transition-colors">
                 <Github className="w-4 h-4" />
-              </Link>
-              <Link href="https://www.linkedin.com/in/rishi-raj-3488432ab/" className="p-2 rounded-full bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white transition-colors">
+              </a>
+              <a href="https://www.linkedin.com/in/rishi-raj-3488432ab/" target="_blank" rel="noopener noreferrer" aria-label="The author on LinkedIn" className="p-2 rounded-full bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white transition-colors">
                 <Linkedin className="w-4 h-4" />
-              </Link>
+              </a>
+              <a href={supportMailto("AeroPrep")} aria-label={`Email ${SUPPORT_EMAIL}`} className="p-2 rounded-full bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white transition-colors">
+                <Mail className="w-4 h-4" />
+              </a>
             </div>
           </div>
 
-          {/* Links Column 1 */}
-          <div>
-            <h4 className="text-white font-semibold mb-6">Product</h4>
+          <nav aria-label="Footer">
             <ul className="space-y-3 text-sm text-gray-400">
-              <li><Link href="#" className="hover:text-primary-200 transition-colors">Features</Link></li>
-              <li><Link href="#" className="hover:text-primary-200 transition-colors">Pricing</Link></li>
-              <li><Link href="#" className="hover:text-primary-200 transition-colors">Interview Questions</Link></li>
-              <li><Link href="#" className="hover:text-primary-200 transition-colors">Success Stories</Link></li>
+              {LINKS.map((link) => (
+                <li key={link.href}>
+                  <Link href={link.href} className="hover:text-primary-200 transition-colors">{link.label}</Link>
+                </li>
+              ))}
             </ul>
-          </div>
-
-          {/* Links Column 2 */}
-          <div>
-            <h4 className="text-white font-semibold mb-6">Resources</h4>
-            <ul className="space-y-3 text-sm text-gray-400">
-              <li><Link href="#" className="hover:text-primary-200 transition-colors">Blog</Link></li>
-              <li><Link href="#" className="hover:text-primary-200 transition-colors">Community</Link></li>
-              <li><Link href="#" className="hover:text-primary-200 transition-colors">Cheatsheets</Link></li>
-              <li><Link href="#" className="hover:text-primary-200 transition-colors">Help Center</Link></li>
-            </ul>
-          </div>
-
-          {/* Links Column 3 */}
-          <div>
-            <h4 className="text-white font-semibold mb-6">Company</h4>
-            <ul className="space-y-3 text-sm text-gray-400">
-              <li><Link href="#" className="hover:text-primary-200 transition-colors">About Us</Link></li>
-              <li><Link href="#" className="hover:text-primary-200 transition-colors">Careers</Link></li>
-              <li><Link href="#" className="hover:text-primary-200 transition-colors">Privacy Policy</Link></li>
-              <li><Link href="#" className="hover:text-primary-200 transition-colors">Terms of Service</Link></li>
-            </ul>
-          </div>
+          </nav>
         </div>
 
-        <div className="pt-8 border-t border-white/5 flex flex-col md:flex-row items-center justify-between gap-4">
-          <p className="text-sm text-gray-500">
-            © {new Date().getFullYear()} AeroPrep Inc. All rights reserved.
-          </p>
-          <div className="flex items-center gap-2 text-sm text-gray-500">
-            <span className="w-2 h-2 rounded-full bg-primary-200 animate-pulse"></span>
-            All systems operational
-          </div>
-        </div>
+        <p className="mt-10 pt-8 border-t border-white/5 text-sm text-gray-500">
+          © {new Date().getFullYear()} AeroPrep. Open source on GitHub.
+        </p>
       </div>
     </footer>
   );
