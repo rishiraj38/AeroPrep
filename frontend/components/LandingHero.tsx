@@ -148,6 +148,9 @@ export function LandingHero() {
           <span className="text-xl font-bold">AeroPrep</span>
         </Link>
         <nav className="flex items-center gap-2 sm:gap-4">
+          <Link href="/resources" className="hidden px-3 py-2 text-sm font-medium text-light-400 transition-colors hover:text-white sm:block">
+            Prep library
+          </Link>
           <Link href="/sign-in" className="px-3 py-2 text-sm font-medium text-light-400 transition-colors hover:text-white">
             Sign in
           </Link>

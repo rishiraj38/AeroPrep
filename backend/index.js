@@ -17,6 +17,7 @@ const { describeProvider, stats: aiStats } = require('./services/llm');
 const { AppError } = require('./services/appError');
 const { register, login, authMiddleware, getUserById, JWT_SECRET } = require('./services/authService');
 const {
+  saveAppFeedback,
   getQuota,
   assertCanStartInterview,
   getActiveInterview,
@@ -35,6 +36,7 @@ const {
   getOrCreateFeedback
 } = require('./services/sessionService');
 const { RESUME_STORE_CHARS, JOB_DESCRIPTION_CHARS } = require('./services/limits');
+const { mailConfigured, sendFeedbackEmail } = require('./services/mailService');
 
 const app = express();
 
@@ -71,6 +73,9 @@ const generalLimiter = limiter(15, 300, 'Too many requests. Please slow down and
 const authLimiter = limiter(15, 15, 'Too many attempts. Please wait a few minutes and try again.');
 // Routes that can call the model or create interviews, per signed-in user
 const aiLimiter = limiter(10, 40, 'You are doing that too often. Please wait a few minutes.', (req) => `user:${req.userId}`);
+
+// Product feedback, per signed-in user
+const feedbackLimiter = limiter(60, 5, 'Thanks, we have your feedback. Please try again later.', (req) => `user:${req.userId}`);
 
 app.use(generalLimiter);
 
@@ -460,6 +465,26 @@ app.post('/interviews/:id/feedback', authMiddleware, aiLimiter, async (req, res)
   }
 });
 
+// PRODUCT FEEDBACK — saved, and emailed to the support address when email is configured
+
+app.post('/feedback', authMiddleware, feedbackLimiter, async (req, res) => {
+  const rating = Number(req.body.rating);
+  const message = String(req.body.message || '').trim().slice(0, 2000);
+  const interviewId = Number.isInteger(Number(req.body.interviewId)) ? Number(req.body.interviewId) : null;
+
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+    return res.status(400).json({ error: 'Please choose a rating from 1 to 5.' });
+  }
+
+  try {
+    const saved = await saveAppFeedback(req.userId, { interviewId, rating, message });
+    sendFeedbackEmail(saved); // not awaited: the user should not wait on the mail server
+    res.status(201).json({ success: true });
+  } catch (error) {
+    sendError(res, error, 'Error saving feedback');
+  }
+});
+
 // IMAGEKIT AUTH
 
 // Signs a browser upload the way ImageKit expects: HMAC-SHA1 of token + expiry with the private key
@@ -566,5 +591,6 @@ const PORT = process.env.PORT || 5001;
 httpServer.listen(PORT, () => {
     console.log(`Server Running on port ${PORT} (HTTP + WebSocket)`);
     console.log(`AI provider: ${describeProvider()}`);
+    if (!mailConfigured) console.warn('SMTP_USER / SMTP_PASS are not set: user feedback is saved but not emailed.');
     if (!imagekitConfigured) console.warn('ImageKit keys are not set: resume upload is disabled (manual entry still works).');
 });

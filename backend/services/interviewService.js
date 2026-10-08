@@ -1,7 +1,7 @@
 const { Prisma } = require('@prisma/client');
 const { prisma } = require('./prismaClient');
 const { AppError } = require('./appError');
-const { FREE_INTERVIEW_LIMIT } = require('./limits');
+const { FREE_INTERVIEW_LIMIT, SUPPORT_EMAIL } = require('./limits');
 
 // How many interviews the user has started, and how many they are allowed
 async function getQuota(userId) {
@@ -20,7 +20,7 @@ async function getQuota(userId) {
 async function assertCanStartInterview(userId) {
   const quota = await getQuota(userId);
   if (quota.remaining <= 0) {
-    throw new AppError(403, 'INTERVIEW_LIMIT_REACHED', `You have used all ${quota.limit} of your free interviews.`);
+    throw new AppError(403, 'INTERVIEW_LIMIT_REACHED', `You have used all ${quota.limit} of your free interviews. Email ${SUPPORT_EMAIL} to get more.`);
   }
   return quota;
 }
@@ -207,6 +207,14 @@ async function saveFeedback(interviewId, feedback) {
   });
 }
 
+// What a user thought of the product, left after an interview
+async function saveAppFeedback(userId, { interviewId, rating, message }) {
+  return prisma.appFeedback.create({
+    data: { userId, interviewId, rating, message },
+    include: { user: { select: { name: true, email: true } } }
+  });
+}
+
 // Get all interviews for a user
 async function getUserInterviews(userId) {
   const interviews = await prisma.interview.findMany({
@@ -260,6 +268,7 @@ async function getInterviewById(interviewId, userId) {
 }
 
 module.exports = {
+  saveAppFeedback,
   getQuota,
   assertCanStartInterview,
   getActiveInterview,

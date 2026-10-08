@@ -6,6 +6,8 @@ function positiveInt(value, fallback) {
 }
 
 module.exports = {
+  // Where users write to for more interviews, and where in-app feedback is emailed
+  SUPPORT_EMAIL: process.env.SUPPORT_EMAIL || 'hailhelixnewsform@gmail.com',
   // Interviews a user may start for free (User.interviewLimit overrides it per account)
   FREE_INTERVIEW_LIMIT: positiveInt(process.env.FREE_INTERVIEW_LIMIT, 3),
   // Interview length, counted from the candidate's first answer

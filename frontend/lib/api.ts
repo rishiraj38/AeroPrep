@@ -125,6 +125,11 @@ export async function skipCoding(interviewId: number) {
   return request(`/interviews/${interviewId}/coding/skip`, { method: 'POST' });
 }
 
+// What the user thought of AeroPrep itself; saved and emailed to the team
+export async function sendProductFeedback(rating: number, message: string, interviewId: number | null) {
+  return request('/feedback', { method: 'POST', body: { rating, message, interviewId } });
+}
+
 // ============================================
 // FEEDBACK (Protected)
 // ============================================

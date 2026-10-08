@@ -2,54 +2,51 @@
 
 import React from 'react';
 import { Accordion, AccordionItem } from '@/components/ui/accordion';
-import { Mail, MessageSquare, Shield, HelpCircle, FileText } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import Link from 'next/link';
+import { Mail, HelpCircle, Hammer, Ticket } from 'lucide-react';
+import { SUPPORT_EMAIL, supportMailto } from '@/lib/contact';
+
+// What we would like to build next. Listed so anyone who wants to help knows where to start.
+const IDEAS = [
+  { title: 'Run code for real', body: 'The coding round is judged by the AI. Running solutions against test cases in a sandbox would make the result exact.' },
+  { title: 'A more human voice', body: 'Alex speaks with the browser\'s built-in voice. A proper text-to-speech voice would make the interview feel far more real.' },
+  { title: 'Faster replies', body: 'Streaming Alex\'s answer as it is written, and speaking it sentence by sentence, would cut the pause after each answer.' },
+  { title: 'More kinds of interview', body: 'System design rounds, behavioural-only rounds, and tracks for data, product and DevOps roles.' },
+  { title: 'Company-style interviews', body: 'Question styles modelled on how specific companies interview, such as leadership-principle rounds.' },
+  { title: 'Progress over time', body: 'Charts of your scores across interviews and the weaknesses that keep coming up.' },
+  { title: 'Email verification', body: 'Confirming email addresses at sign-up, plus password reset.' },
+  { title: 'Tests', body: 'An automated test suite so changes can ship with confidence.' },
+];
 
 export default function HelpPage() {
   return (
     <div className="min-h-screen p-8 pt-20">
       <div className="max-w-4xl mx-auto space-y-12">
-        
+
         {/* Header */}
         <div className="text-center space-y-4">
           <h1 className="text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-600">
             Help & Support
           </h1>
           <p className="text-muted-foreground text-lg max-w-2xl mx-auto">
-            Have questions? We're here to help. Explore our FAQs or reach out to our support team directly.
+            Questions, problems, or out of interviews? Write to us and a person will answer.
           </p>
         </div>
 
-        {/* Quick Links */}
-        <div className="grid md:grid-cols-3 gap-6">
-          <div className="p-6 rounded-xl bg-card border hover:border-primary/50 transition-colors group cursor-pointer">
+        {/* Contact */}
+        <div className="grid md:grid-cols-2 gap-6">
+          <a href={supportMailto('AeroPrep support')} className="p-6 rounded-xl bg-card border hover:border-primary/50 transition-colors group">
             <Mail className="h-8 w-8 text-primary mb-4 group-hover:scale-110 transition-transform" />
             <h3 className="font-semibold mb-2">Email Support</h3>
-            <p className="text-sm text-muted-foreground mb-4">Get in touch with our team for personalized assistance.</p>
-            <Link href="mailto:support@aeroprep.com" className="text-primary text-sm font-medium hover:underline">
-              rishiraj438gt@gmail.com
-            </Link>
-          </div>
-          
-          <div className="p-6 rounded-xl bg-card border hover:border-primary/50 transition-colors group cursor-pointer">
-            <MessageSquare className="h-8 w-8 text-purple-500 mb-4 group-hover:scale-110 transition-transform" />
-            <h3 className="font-semibold mb-2">Feedback</h3>
-            <p className="text-sm text-muted-foreground mb-4">Share your thoughts on how we can improve AeroPrep.</p>
-            <Button variant="link" className="p-0 h-auto text-purple-500 hover:text-purple-400">
-              Submit Feedback
-            </Button>
-          </div>
+            <p className="text-sm text-muted-foreground mb-4">Something not working, or a question about your account.</p>
+            <span className="text-primary text-sm font-medium group-hover:underline break-all">{SUPPORT_EMAIL}</span>
+          </a>
 
-          <div className="p-6 rounded-xl bg-card border hover:border-primary/50 transition-colors group cursor-pointer">
-            <Shield className="h-8 w-8 text-green-500 mb-4 group-hover:scale-110 transition-transform" />
-            <h3 className="font-semibold mb-2">Privacy & Terms</h3>
-            <p className="text-sm text-muted-foreground mb-4">Read about how we protect your data and usage policies.</p>
-            <div className="flex gap-4 text-sm">
-                <Link href="#" className="text-muted-foreground hover:text-foreground">Privacy</Link>
-                <Link href="#" className="text-muted-foreground hover:text-foreground">Terms</Link>
-            </div>
-          </div>
+          <a href={supportMailto('More AeroPrep interviews')} className="p-6 rounded-xl bg-card border hover:border-primary/50 transition-colors group">
+            <Ticket className="h-8 w-8 text-purple-500 mb-4 group-hover:scale-110 transition-transform" />
+            <h3 className="font-semibold mb-2">Need more interviews?</h3>
+            <p className="text-sm text-muted-foreground mb-4">Used your free interviews? Email us from your account&apos;s address and ask for more.</p>
+            <span className="text-purple-400 text-sm font-medium group-hover:underline break-all">{SUPPORT_EMAIL}</span>
+          </a>
         </div>
 
         {/* FAQ Section */}
@@ -58,35 +55,57 @@ export default function HelpPage() {
             <HelpCircle className="h-6 w-6 text-primary" />
             <h2 className="text-2xl font-semibold">Frequently Asked Questions</h2>
           </div>
-          
+
           <Accordion className="space-y-1">
-            <AccordionItem title="How does the AI grading work?">
-              Our AI analyzes your responses based on several key metrics: clarity, technical accuracy, relevance, and completeness. It compares your answers against industry-standard best practices and generates a score along with detailed feedback to help you improve.
-            </AccordionItem>
-            
-            <AccordionItem title="Is my resume data secure?">
-              Yes, absolutely. Your resume is processed solely for the purpose of generating relevant interview questions. We do not share your personal data with third parties, and all uploaded files are handled with strict security protocols.
-            </AccordionItem>
-            
-            <AccordionItem title="Can I retry an interview?">
-              Currently, each interview session is unique. However, you can start a new interview at any time with the same or different settings. We are working on a feature to allow "rematches" for specific questions!
-            </AccordionItem>
-            
-            <AccordionItem title="What programming languages are supported?">
-              For the coding round, we support most major languages including JavaScript, Python, Java, C++, and TypeScript. You can select your preferred language before starting the challenge.
+            <AccordionItem title="How many interviews do I get?">
+              Every account can start 3 interviews for free. An interview is counted when you give your first answer, so opening one and leaving does not use it up. If you need more, email {SUPPORT_EMAIL}.
             </AccordionItem>
 
-            <AccordionItem title="Is AeroPrep free to use?">
-                AeroPrep offers both free and premium tiers. The free tier allows for a limited number of practice interviews per month. Upgrading to Premium unlocks unlimited interviews, advanced analytics, and priority support.
+            <AccordionItem title="What happens if I refresh or lose my connection?">
+              Nothing is lost. Your interview is stored on our server as you go. Open the page again and you can resume at the question you were on; the clock keeps running while you are away.
+            </AccordionItem>
+
+            <AccordionItem title="How does the scoring work?">
+              When the interview ends, an AI model reads the full transcript and your coding round and writes the report: scores, strengths, weaknesses and a hire or no-hire call. It is a practice tool, so treat the score as a guide rather than a verdict.
+            </AccordionItem>
+
+            <AccordionItem title="How is my code checked?">
+              Your solution is reviewed by the AI, which reasons about whether it handles the test cases. It is not executed, so an occasional wrong call is possible. You get 5 checks per challenge.
+            </AccordionItem>
+
+            <AccordionItem title="What happens to my resume?">
+              Your PDF is stored with our file host, and its text is sent to our AI provider so the interviewer can ask about your experience. We use it only to run your interviews.
+            </AccordionItem>
+
+            <AccordionItem title="Voice input is not working. What can I do?">
+              Voice input needs Chrome or Edge and microphone permission. In any browser you can type your answers instead; the interview works the same way.
             </AccordionItem>
           </Accordion>
         </div>
 
-        {/* Contact Footer */}
-        <div className="text-center pt-8 border-t border-border/50">
-            <p className="text-muted-foreground">
-                Still can't find what you're looking for? <Link href="mailto:support@aeroprep.com" className="text-foreground font-medium underline">Contact us</Link>
-            </p>
+        {/* Help build */}
+        <div className="bg-card/50 border rounded-2xl p-8">
+          <div className="flex items-center gap-3 mb-2">
+            <Hammer className="h-6 w-6 text-primary" />
+            <h2 className="text-2xl font-semibold">Help build AeroPrep</h2>
+          </div>
+          <p className="text-muted-foreground mb-6">
+            AeroPrep is an independent project and there is a lot we still want to do. If you can help with any of these, or have a better idea, we would love to hear from you.
+          </p>
+          <div className="grid sm:grid-cols-2 gap-4">
+            {IDEAS.map((idea) => (
+              <div key={idea.title} className="rounded-xl border border-border/60 bg-background/40 p-4">
+                <h3 className="font-medium mb-1">{idea.title}</h3>
+                <p className="text-sm text-muted-foreground leading-relaxed">{idea.body}</p>
+              </div>
+            ))}
+          </div>
+          <div className="mt-6 flex flex-wrap items-center gap-3 text-sm">
+            <a href={supportMailto('Helping build AeroPrep')} className="btn-primary">
+              <Mail className="h-4 w-4" /> Get in touch
+            </a>
+            <span className="text-muted-foreground break-all">{SUPPORT_EMAIL}</span>
+          </div>
         </div>
 
       </div>
