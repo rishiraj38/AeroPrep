@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { 
   LayoutDashboard, 
+  BookOpen,
   History, 
   Settings, 
   LogOut, 
@@ -62,6 +63,12 @@ export const Sidebar = ({ user, isSnowing, toggleSnow }: SidebarProps) => {
       icon: History,
       href: "/interview/history",
       active: pathname.startsWith("/interview/history"),
+    },
+    {
+      label: "Prep Library",
+      icon: BookOpen,
+      href: "/resources",
+      active: pathname === "/resources",
     },
     {
       label: "Settings",

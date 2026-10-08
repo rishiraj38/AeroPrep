@@ -30,15 +30,6 @@ export default function HomePage() {
   const [averageScore, setAverageScore] = useState<number>(0);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    if (isAuthenticated()) {
-      setUser(getUser());
-      fetchDashboardData();
-    } else {
-      setLoading(false);
-    }
-  }, []);
-
   async function fetchDashboardData() {
     try {
       const data = await getInterviewHistory();
@@ -57,6 +48,15 @@ export default function HomePage() {
       setLoading(false);
     }
   }
+
+  useEffect(() => {
+    if (isAuthenticated()) {
+      setUser(getUser());
+      fetchDashboardData();
+    } else {
+      setLoading(false);
+    }
+  }, []);
 
   const handleLogout = () => {
     logout();

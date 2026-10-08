@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { createInterview, getQuota, Quota } from '@/lib/api';
 import { isAuthenticated } from '@/lib/auth';
 import { setCurrentInterviewId } from '@/lib/currentInterview';
+import { SUPPORT_EMAIL, supportMailto } from '@/lib/contact';
 import { Button } from '@/components/ui/button';
 import Link from 'next/link';
 import { ArrowLeft, AlertTriangle, Loader2, Rocket, FileText, Type } from 'lucide-react';
@@ -185,7 +186,9 @@ Tech Stack: ${manualTech || "Not specified"}.`
             {outOfInterviews && <AlertTriangle className="h-5 w-5 text-red-400 shrink-0 mt-0.5" />}
             <p className={`text-xs sm:text-sm ${outOfInterviews ? 'text-red-400' : 'text-muted-foreground'}`}>
               {outOfInterviews
-                ? `You have used all ${quota.limit} of your free interviews.`
+                ? <>You have used all {quota.limit} of your free interviews. To get more, email{' '}
+                    <a href={supportMailto('More AeroPrep interviews')} className="underline font-medium text-red-300">{SUPPORT_EMAIL}</a>{' '}
+                    from your account&apos;s email address.</>
                 : `${quota.remaining} of ${quota.limit} free interviews left. An interview is counted once you give your first answer.`}
             </p>
           </div>

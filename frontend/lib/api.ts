@@ -1,4 +1,4 @@
-import { getToken } from './auth';
+import { getToken, removeToken } from './auth';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
 
@@ -50,6 +50,14 @@ export interface InterviewFeedback {
   recommendation: string;
 }
 
+// The server no longer accepts this login (it expired, or the server's signing secret changed):
+// forget it and send the user to sign in again
+export function expireSession() {
+  if (typeof window === 'undefined') return;
+  removeToken();
+  if (!window.location.pathname.startsWith('/sign-')) window.location.assign('/sign-in');
+}
+
 async function request(path: string, options: { method?: string; body?: unknown } = {}) {
   const token = getToken();
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -62,6 +70,7 @@ async function request(path: string, options: { method?: string; body?: unknown 
   });
 
   const data = await response.json().catch(() => null);
+  if (response.status === 401) expireSession();
   if (!response.ok) {
     throw new ApiError(data?.error || 'Something went wrong. Please try again.', data?.code || 'ERROR', response.status);
   }
@@ -114,6 +123,11 @@ export async function submitCode(interviewId: number, code: string): Promise<Cod
 
 export async function skipCoding(interviewId: number) {
   return request(`/interviews/${interviewId}/coding/skip`, { method: 'POST' });
+}
+
+// What the user thought of AeroPrep itself; saved and emailed to the team
+export async function sendProductFeedback(rating: number, message: string, interviewId: number | null) {
+  return request('/feedback', { method: 'POST', body: { rating, message, interviewId } });
 }
 
 // ============================================

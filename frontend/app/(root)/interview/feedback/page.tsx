@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { CheckCircle, AlertCircle, Target, Trophy, ArrowRight, Home, RotateCcw } from 'lucide-react';
+import ProductFeedback from '@/components/ProductFeedback';
 
 export default function FeedbackPage() {
   const router = useRouter();
@@ -211,6 +212,9 @@ export default function FeedbackPage() {
                 {feedback.detailedFeedback}
             </div>
         </div>
+
+        {/* What did you think of AeroPrep? */}
+        <ProductFeedback interviewId={getCurrentInterviewId()} />
 
         {/* Action Buttons */}
         <div className="flex flex-col sm:flex-row justify-center gap-4 pt-4">

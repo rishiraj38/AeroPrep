@@ -2,20 +2,14 @@ require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const ImageKit = require("imagekit");
+const crypto = require('crypto');
 const cors = require('cors');
+const helmet = require('helmet');
+const { rateLimit } = require('express-rate-limit');
 
 // Resume uploads need ImageKit; without its keys the server still runs and interviews
 // can be started from manually entered details
 const imagekitConfigured = !!(process.env.IMAGEKIT_PUBLIC_KEY && process.env.IMAGEKIT_PRIVATE_KEY && process.env.IMAGEKIT_URL_ENDPOINT);
-const imagekit = imagekitConfigured
-    ? new ImageKit({
-        publicKey: process.env.IMAGEKIT_PUBLIC_KEY,
-        privateKey: process.env.IMAGEKIT_PRIVATE_KEY,
-        urlEndpoint: process.env.IMAGEKIT_URL_ENDPOINT
-    })
-    : null;
-
 
 // Services
 const { extractTextFromPdf } = require('./services/pdfService');
@@ -23,6 +17,7 @@ const { describeProvider, stats: aiStats } = require('./services/llm');
 const { AppError } = require('./services/appError');
 const { register, login, authMiddleware, getUserById, JWT_SECRET } = require('./services/authService');
 const {
+  saveAppFeedback,
   getQuota,
   assertCanStartInterview,
   getActiveInterview,
@@ -41,11 +36,48 @@ const {
   getOrCreateFeedback
 } = require('./services/sessionService');
 const { RESUME_STORE_CHARS, JOB_DESCRIPTION_CHARS } = require('./services/limits');
+const { mailConfigured, sendFeedbackEmail } = require('./services/mailService');
 
 const app = express();
 
-app.use(cors());
-app.use(express.json());
+// Behind Render's proxy, so the client's address is in X-Forwarded-For
+app.set('trust proxy', 1);
+
+// Browsers may only call this API from the app's own pages. Add more with CORS_ORIGINS (comma separated).
+const allowedOrigins = [
+  'http://localhost:3000',
+  /^https:\/\/ai-interview-coach[a-z0-9-]*\.vercel\.app$/,
+  ...(process.env.CORS_ORIGINS || '').split(',').map((origin) => origin.trim()).filter(Boolean)
+];
+const corsOptions = { origin: allowedOrigins };
+
+app.use(helmet());
+app.use(cors(corsOptions));
+app.use(express.json({ limit: '200kb' }));
+
+// ─── Rate limits ─────────────────────────────────────────────────────────────
+function limiter(windowMinutes, limit, message, keyGenerator) {
+  return rateLimit({
+    windowMs: windowMinutes * 60 * 1000,
+    limit,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    ...(keyGenerator ? { keyGenerator } : {}),
+    message: { error: message, code: 'RATE_LIMITED' }
+  });
+}
+
+// Everything, per address
+const generalLimiter = limiter(15, 300, 'Too many requests. Please slow down and try again shortly.');
+// Sign-in and sign-up, per address: slows down password guessing and mass account creation
+const authLimiter = limiter(15, 15, 'Too many attempts. Please wait a few minutes and try again.');
+// Routes that can call the model or create interviews, per signed-in user
+const aiLimiter = limiter(10, 40, 'You are doing that too often. Please wait a few minutes.', (req) => `user:${req.userId}`);
+
+// Product feedback, per signed-in user
+const feedbackLimiter = limiter(60, 5, 'Thanks, we have your feedback. Please try again later.', (req) => `user:${req.userId}`);
+
+app.use(generalLimiter);
 
 // ─── In-Process Metrics ──────────────────────────────────────────────────────
 const metrics = {
@@ -77,7 +109,14 @@ function getAIStats() {
 }
 
 // ─── /monitor — Live dashboard ──────────────────────────────────────────────
-app.get('/monitor', (req, res) => {
+// The monitoring pages are open unless MONITOR_TOKEN is set; then they need ?token=<value>
+function monitorAccess(req, res, next) {
+  const expected = process.env.MONITOR_TOKEN;
+  if (expected && req.query.token !== expected) return res.status(404).send('Not found');
+  next();
+}
+
+app.get('/monitor', monitorAccess, (req, res) => {
   const upSecs = Math.floor((Date.now() - metrics.startedAt) / 1000);
   const upStr  = `${Math.floor(upSecs/3600)}h ${Math.floor((upSecs%3600)/60)}m ${upSecs%60}s`;
   const aiSt   = getAIStats();
@@ -87,6 +126,7 @@ app.get('/monitor', (req, res) => {
     : '0.0';
 
   res.setHeader('Content-Type', 'text/html');
+  res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
   res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -200,7 +240,7 @@ app.get('/monitor', (req, res) => {
 });
 
 // ─── /metrics — Prometheus-compatible text format (for future use) ───────────
-app.get('/metrics', (req, res) => {
+app.get('/metrics', monitorAccess, (req, res) => {
   const aiSt = getAIStats();
   res.setHeader('Content-Type', 'text/plain');
   res.send([
@@ -237,7 +277,7 @@ app.get('/health', (req, res) => {
 // AUTH ROUTES
 
 
-app.post('/auth/register', async (req, res) => {
+app.post('/auth/register', authLimiter, async (req, res) => {
   const { name, email, password } = req.body;
   
   if (!name || !email || !password) {
@@ -253,7 +293,7 @@ app.post('/auth/register', async (req, res) => {
   }
 });
 
-app.post('/auth/login', async (req, res) => {
+app.post('/auth/login', authLimiter, async (req, res) => {
   const { email, password } = req.body;
   
   if (!email || !password) {
@@ -317,7 +357,7 @@ app.get('/interviews/quota', authMiddleware, async (req, res) => {
 });
 
 // Create interview
-app.post('/interviews', authMiddleware, async (req, res) => {
+app.post('/interviews', authMiddleware, aiLimiter, async (req, res) => {
   const { resumeURL, jobDescription, resumeText } = req.body;
 
   // Require either resumeURL or resumeText/jobDescription
@@ -383,7 +423,7 @@ app.get('/interviews/:id', authMiddleware, async (req, res) => {
 
 // CODING ROUND — one stored challenge per interview, evaluated on the server
 
-app.post('/interviews/:id/coding/challenge', authMiddleware, async (req, res) => {
+app.post('/interviews/:id/coding/challenge', authMiddleware, aiLimiter, async (req, res) => {
   try {
     res.json({ challenge: await getOrCreateChallenge(req.params.id, req.userId) });
   } catch (error) {
@@ -391,7 +431,7 @@ app.post('/interviews/:id/coding/challenge', authMiddleware, async (req, res) =>
   }
 });
 
-app.post('/interviews/:id/coding/run', authMiddleware, async (req, res) => {
+app.post('/interviews/:id/coding/run', authMiddleware, aiLimiter, async (req, res) => {
   try {
     res.json({ challenge: await runCode(req.params.id, req.userId, req.body) });
   } catch (error) {
@@ -399,7 +439,7 @@ app.post('/interviews/:id/coding/run', authMiddleware, async (req, res) => {
   }
 });
 
-app.post('/interviews/:id/coding/submit', authMiddleware, async (req, res) => {
+app.post('/interviews/:id/coding/submit', authMiddleware, aiLimiter, async (req, res) => {
   try {
     res.json({ challenge: await submitCode(req.params.id, req.userId, req.body) });
   } catch (error) {
@@ -407,7 +447,7 @@ app.post('/interviews/:id/coding/submit', authMiddleware, async (req, res) => {
   }
 });
 
-app.post('/interviews/:id/coding/skip', authMiddleware, async (req, res) => {
+app.post('/interviews/:id/coding/skip', authMiddleware, aiLimiter, async (req, res) => {
   try {
     res.json(await skipCoding(req.params.id, req.userId));
   } catch (error) {
@@ -417,7 +457,7 @@ app.post('/interviews/:id/coding/skip', authMiddleware, async (req, res) => {
 
 // FEEDBACK — generated once on the server from the stored interview, then read back
 
-app.post('/interviews/:id/feedback', authMiddleware, async (req, res) => {
+app.post('/interviews/:id/feedback', authMiddleware, aiLimiter, async (req, res) => {
   try {
     res.json({ feedback: await getOrCreateFeedback(req.params.id, req.userId) });
   } catch (error) {
@@ -425,19 +465,37 @@ app.post('/interviews/:id/feedback', authMiddleware, async (req, res) => {
   }
 });
 
+// PRODUCT FEEDBACK — saved, and emailed to the support address when email is configured
+
+app.post('/feedback', authMiddleware, feedbackLimiter, async (req, res) => {
+  const rating = Number(req.body.rating);
+  const message = String(req.body.message || '').trim().slice(0, 2000);
+  const interviewId = Number.isInteger(Number(req.body.interviewId)) ? Number(req.body.interviewId) : null;
+
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+    return res.status(400).json({ error: 'Please choose a rating from 1 to 5.' });
+  }
+
+  try {
+    const saved = await saveAppFeedback(req.userId, { interviewId, rating, message });
+    sendFeedbackEmail(saved); // not awaited: the user should not wait on the mail server
+    res.status(201).json({ success: true });
+  } catch (error) {
+    sendError(res, error, 'Error saving feedback');
+  }
+});
+
 // IMAGEKIT AUTH
 
-app.get('/imagekit-auth', authMiddleware, function (req, res) {
-    if (!imagekit) {
+// Signs a browser upload the way ImageKit expects: HMAC-SHA1 of token + expiry with the private key
+app.get('/imagekit-auth', authMiddleware, aiLimiter, function (req, res) {
+    if (!imagekitConfigured) {
         return res.status(503).send("Resume upload is not configured");
     }
-    try {
-        var result = imagekit.getAuthenticationParameters();
-        res.send(result);
-    } catch (error) {
-        console.error("ImageKit Auth Error:", error);
-        res.status(500).send("Auth Failed");
-    }
+    const token = crypto.randomUUID();
+    const expire = Math.floor(Date.now() / 1000) + 30 * 60;
+    const signature = crypto.createHmac('sha1', process.env.IMAGEKIT_PRIVATE_KEY).update(token + expire).digest('hex');
+    res.json({ token, expire, signature });
 });
 
 // ─── HTTP + Socket.IO server ───────────────────────────────────────────────────
@@ -445,9 +503,10 @@ const httpServer = http.createServer(app);
 
 const io = new Server(httpServer, {
   cors: {
-    origin: '*',
+    origin: allowedOrigins,
     methods: ['GET', 'POST']
-  }
+  },
+  maxHttpBufferSize: 100 * 1024 // interview events are small; refuse anything large
 });
 
 // ─── Interview WebSocket ──────────────────────────────────────────────────────
@@ -486,6 +545,15 @@ io.on('connection', (socket) => {
   metrics.websocket.totalSessions++;
   if (metrics.websocket.connected > metrics.websocket.peak) metrics.websocket.peak = metrics.websocket.connected;
 
+  // At most 30 events a minute per connection; a real interview sends a handful
+  let eventCount = 0;
+  const eventWindow = setInterval(() => { eventCount = 0; }, 60 * 1000);
+  socket.use((packet, next) => {
+    if (++eventCount > 30) return next(new Error('rate limited'));
+    next();
+  });
+  socket.on('disconnect', () => clearInterval(eventWindow));
+
   // Each event is acknowledged with { ok, state } — the full interview state as stored on the
   // server — so the client can always redraw from it, including after a refresh or reconnect.
 
@@ -523,5 +591,6 @@ const PORT = process.env.PORT || 5001;
 httpServer.listen(PORT, () => {
     console.log(`Server Running on port ${PORT} (HTTP + WebSocket)`);
     console.log(`AI provider: ${describeProvider()}`);
+    if (!mailConfigured) console.warn('SMTP_USER / SMTP_PASS are not set: user feedback is saved but not emailed.');
     if (!imagekitConfigured) console.warn('ImageKit keys are not set: resume upload is disabled (manual entry still works).');
 });

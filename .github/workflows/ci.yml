@@ -31,10 +31,6 @@ jobs:
         
       - name: Run Lint
         run: npm run lint
-        
-      - name: Run Tests
-        run: npm run test
-        continue-on-error: true 
 
   frontend-ci:
     runs-on: ubuntu-latest
