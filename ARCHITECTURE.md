@@ -51,24 +51,22 @@ Here is how data physically moves through the system during a mock interview ses
 - `backend/index.js` routes this to `authService.js`, which saves the user to PostgreSQL via Prisma and returns a secure JWT token.
 
 **2. Starting a New Interview:**
-- The logged-in user navigates to `interview/create`. They paste a target Job Description and upload their PDF Resume (managed via ImageKit, which gives back a direct URL).
-- The frontend sends this data via a `POST /interviews` request to the backend.
-- The `pdfService.js` fetches the PDF from the URL and extracts its raw text.
-- The `aiService.js` sends the resume text and job description to the LLM with a strict prompt to generate role-specific interview questions.
-- `interviewService.js` saves these questions to the database as a new interview record, and returns the ID to the frontend.
+- The logged-in user navigates to `interview/create`. They upload their PDF resume (stored on ImageKit) or enter the role details manually, and can paste a job description.
+- The frontend sends this via `POST /interviews`. The backend checks the user's interview limit (`GET /interviews/quota` shows it), extracts the resume text once with `pdfService.js`, and stores it with the new interview.
+- The browser keeps only the interview id (`frontend/lib/currentInterview.ts`); everything else lives in the database.
 
-**3. The Q&A Session:**
-- The user is redirected to the `interview/session` page, viewing the first generated question.
-- As the user types their answers and proceeds, the frontend hits `PUT /interviews/:id/answers`. The backend's `interviewService.js` continuously records these answers in the database.
+**3. The Live Interview:**
+- `interview/session` opens a Socket.IO connection (JWT required) and sends `interview:join`. The reply is the full interview state: transcript, time left, answers used.
+- The opening greeting is fixed text. Each candidate answer is sent as `interview:answer`; `sessionService.js` stores it, makes exactly one model call against the stored transcript, stores the reply and returns the new state.
+- The server owns the transcript and the clock, so a page refresh or reconnect re-joins and resumes where the candidate left off, at no model cost.
+- The interview ends when the interviewer concludes, when the answer or time limit in `services/limits.js` is reached, or when the candidate hangs up (`interview:end`).
 
-**4. The Coding Round (If Applicable):**
-- Upon reaching the technical portion, the frontend loads `interview/coding`.
-- It triggers `POST /generate-coding-question`. The AI generates a customized data-structures/algorithms problem based on the user's primary programming language.
-- The user writes and submits code. The frontend calls `POST /evaluate-code`. The AI acts as a code evaluator to check correctness, time complexity, and edge cases.
-- The code and the AI's technical evaluation result are saved to the database (`PUT /interviews/:id/coding`).
+**4. The Coding Round (Optional):**
+- `interview/coding` calls `POST /interviews/:id/coding/challenge`, which generates one challenge per interview and returns the stored one on every later call.
+- `POST /interviews/:id/coding/run` evaluates the code with the model (a capped number of runs; unchanged code returns the stored result), `.../coding/submit` saves the final code, and `.../coding/skip` skips the round.
 
 **5. Generating Final Feedback:**
-- The user completes the interview. The frontend calls `PUT /interviews/:id/feedback`.
-- The backend packages all the user's Q&A answers and coding results, sending them to `aiService.generateFeedback()`.
-- The AI responds with a comprehensive review scorecard (strengths, actionable weaknesses, quantitative scores, and a hire/no-hire verdict).
-- The user is routed to `interview/feedback` where the application beautifully renders their final results and statistics.
+- `interview/feedback` calls `POST /interviews/:id/feedback`. The backend builds the report from the stored transcript and coding round, saves it, and returns the saved report on every later call.
+
+**AI provider:**
+- All model calls go through `backend/services/llm/`, which picks the provider from `AI_API_KEY` / `AI_MODEL` (Anthropic through its SDK, everything else through the OpenAI-compatible API) and records token usage per interview and on `/monitor`.

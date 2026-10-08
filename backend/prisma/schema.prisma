@@ -15,6 +15,8 @@ model User {
   name       String
   email      String      @unique
   password   String
+  // Interviews this user may start; null means the free default (FREE_INTERVIEW_LIMIT)
+  interviewLimit Int?
   createdAt  DateTime    @default(now())
   updatedAt  DateTime    @updatedAt
   interviews Interview[]
@@ -25,13 +27,32 @@ model Interview {
   userId          Int
   user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   resumeURL       String?
+  resumeText      String?
   jobDescription  String?
   status          String           @default("in_progress")
+  // Set on the candidate's first answer; started interviews count against the user's limit
+  startedAt       DateTime?
+  endedAt         DateTime?
+  inputTokens     Int              @default(0)
+  outputTokens    Int              @default(0)
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
+  messages        Message[]
   questions       Question[]
   codingChallenge CodingChallenge?
   feedback        Feedback?
+}
+
+// Live interview transcript, in order
+model Message {
+  id          Int       @id @default(autoincrement())
+  interviewId Int
+  interview   Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  speaker     String // "ai" | "user"
+  text        String
+  createdAt   DateTime  @default(now())
+
+  @@index([interviewId])
 }
 
 model Question {
@@ -59,6 +80,9 @@ model CodingChallenge {
   userCode         String?
   passed           Boolean?
   aiFeedback       String?
+  // Last evaluation ({ passed, feedback, testResults }) and how many evaluations were spent
+  result           Json?
+  runs             Int       @default(0)
   skipped          Boolean   @default(false)
   createdAt        DateTime  @default(now())
 }

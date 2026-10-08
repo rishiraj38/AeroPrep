@@ -2,8 +2,9 @@
 
 import React, { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { createInterview } from '@/lib/api';
+import { createInterview, getQuota, Quota } from '@/lib/api';
 import { isAuthenticated } from '@/lib/auth';
+import { setCurrentInterviewId } from '@/lib/currentInterview';
 import { Button } from '@/components/ui/button';
 import Link from 'next/link';
 import { ArrowLeft, AlertTriangle, Loader2, Rocket, FileText, Type } from 'lucide-react';
@@ -77,6 +78,31 @@ function CreateInterviewContent() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  // Interviews left on the account, and any interview that can be resumed instead of starting over
+  const [quota, setQuota] = useState<Quota | null>(null);
+  const [activeInterviewId, setActiveInterviewId] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!isAuthenticated()) {
+      router.push('/sign-in');
+      return;
+    }
+    getQuota()
+      .then(({ quota, active }) => {
+        setQuota(quota);
+        setActiveInterviewId(active?.id ?? null);
+      })
+      .catch((err) => console.error('Failed to load interview quota:', err));
+  }, [router]);
+
+  const resumeInterview = () => {
+    if (!activeInterviewId) return;
+    setCurrentInterviewId(activeInterviewId);
+    router.push('/interview/session');
+  };
+
+  const outOfInterviews = quota !== null && quota.remaining <= 0;
+
   useEffect(() => {
     if (roleParam) {
         setManualRole(roleParam);
@@ -107,62 +133,18 @@ function CreateInterviewContent() {
     setError('');
 
     try {
-      // Clear previous
-      localStorage.removeItem('generatedFeedback');
-      localStorage.removeItem('codingChallenge');
-      localStorage.removeItem('codingResult');
-      localStorage.removeItem('codingCode');
-      localStorage.removeItem('interviewAnswers');
-      
-      // Determine Context
-      let finalResumeURL = "";
-      let practiceResumeText = "";
-
-      if (mode === 'upload') {
-          finalResumeURL = resumeURL;
-          // Resume Text will be extracted by backend from PDF
-      } else {
-          // Construct text context from manual inputs
-          practiceResumeText = `Candidate Role: ${manualRole}. 
+      // Manual mode has no PDF: the role, description and tech stack stand in for the resume
+      const practiceResumeText = mode === 'manual'
+        ? `Candidate Role: ${manualRole}. 
 Job Description: ${manualDesc}
-Tech Stack: ${manualTech || "Not specified"}.`;
-          
-          // For authenticated users, we need a URL for DB schema. 
-          // Since we made resumeURL optional in schema, we can match "manual" indicator or empty.
-          // BUT: Prisma might default to null. Let's send empty string or handle logic.
-          // Let's pass empty string if manual.
-          finalResumeURL = ""; 
-      }
+Tech Stack: ${manualTech || "Not specified"}.`
+        : "";
 
-      if (!isAuthenticated()) {
-        const { generateQuestions } = await import('@/lib/api');
-        
-        // Pass empty URL if manual mode, generateQuestions will use text
-        const questions = await generateQuestions(
-            finalResumeURL, 
-            manualDesc, 
-            practiceResumeText
-        );
-        
-        localStorage.setItem('interviewQuestions', JSON.stringify(questions));
-        localStorage.setItem('resumeURL', finalResumeURL); 
-        localStorage.setItem('resumeText', practiceResumeText);
-        localStorage.setItem('jobDescription', manualDesc);
-        localStorage.setItem('interviewId', '');
-        
-        router.push('/interview/session');
-        return;
-      }
-      
-      // Authenticated Flow
-      const data = await createInterview(finalResumeURL, manualDesc || "Interview based on uploaded resume", practiceResumeText);
-      
-      localStorage.setItem('interviewId', String(data.interview.id));
-      localStorage.setItem('interviewQuestions', JSON.stringify(data.questions));
-      localStorage.setItem('resumeURL', finalResumeURL);
-      localStorage.setItem('resumeText', practiceResumeText);
-      localStorage.setItem('jobDescription', manualDesc || '');
-      
+      // The server stores the resume and job description with the interview;
+      // the browser only needs to remember which interview it is on.
+      const data = await createInterview(mode === 'upload' ? resumeURL : "", manualDesc, practiceResumeText);
+      setCurrentInterviewId(data.interview.id);
+
       router.push('/interview/session');
     } catch (err: any) {
       setError(err.message);
@@ -185,12 +167,26 @@ Tech Stack: ${manualTech || "Not specified"}.`;
           </h1>
         </div>
         
-        {!isAuthenticated() && (
-          <div className="mb-6 p-3 sm:p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg flex items-start gap-3">
-            <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-            <p className="text-xs sm:text-sm text-amber-600 dark:text-amber-400">
-              Your interview won't be saved if you're not signed in.{' '}
-              <Link href="/sign-in" className="underline font-medium cursor-pointer">Sign in</Link> to save your progress.
+        {activeInterviewId && (
+          <div className="mb-6 p-3 sm:p-4 bg-primary-200/10 border border-primary-200/30 rounded-lg flex flex-wrap items-center justify-between gap-3">
+            <p className="text-xs sm:text-sm text-light-100">
+              You have an interview in progress. Resuming it does not use another interview.
+            </p>
+            <Button onClick={resumeInterview} size="sm" className="btn-primary cursor-pointer">
+              Resume Interview
+            </Button>
+          </div>
+        )}
+
+        {quota && (
+          <div className={`mb-6 p-3 sm:p-4 rounded-lg flex items-start gap-3 border ${
+            outOfInterviews ? 'bg-red-500/10 border-red-500/30' : 'bg-muted/30 border-border'
+          }`}>
+            {outOfInterviews && <AlertTriangle className="h-5 w-5 text-red-400 shrink-0 mt-0.5" />}
+            <p className={`text-xs sm:text-sm ${outOfInterviews ? 'text-red-400' : 'text-muted-foreground'}`}>
+              {outOfInterviews
+                ? `You have used all ${quota.limit} of your free interviews.`
+                : `${quota.remaining} of ${quota.limit} free interviews left. An interview is counted once you give your first answer.`}
             </p>
           </div>
         )}
@@ -301,11 +297,11 @@ Tech Stack: ${manualTech || "Not specified"}.`;
 
             <Button 
               onClick={() => handleSubmit()} 
-              disabled={loading || (mode === 'upload' && !resumeURL)}
+              disabled={loading || outOfInterviews || (mode === 'upload' && !resumeURL)}
               className="w-full btn-primary cursor-pointer py-6 text-base sm:text-lg mt-6"
             >
               {loading ? (
-                <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Generating Interview...</>
+                <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Setting Up Interview...</>
               ) : (
                 <><Rocket className="mr-2 h-4 w-4" /> Start Interview</>
               )}

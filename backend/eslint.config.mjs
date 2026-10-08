@@ -15,6 +15,8 @@ export default [
                 clearInterval: "readonly",
                 Buffer: "readonly",
                 fetch: "readonly",
+                AbortController: "readonly",
+                URL: "readonly",
                 module: "readonly",
                 require: "readonly",
                 exports: "readonly",

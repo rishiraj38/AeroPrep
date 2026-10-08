@@ -2,29 +2,45 @@ require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const axios = require('axios');
 const ImageKit = require("imagekit");
 const cors = require('cors');
 
-const imagekit = new ImageKit({
-    publicKey: process.env.IMAGEKIT_PUBLIC_KEY,
-    privateKey: process.env.IMAGEKIT_PRIVATE_KEY,
-    urlEndpoint: process.env.IMAGEKIT_URL_ENDPOINT
-});
+// Resume uploads need ImageKit; without its keys the server still runs and interviews
+// can be started from manually entered details
+const imagekitConfigured = !!(process.env.IMAGEKIT_PUBLIC_KEY && process.env.IMAGEKIT_PRIVATE_KEY && process.env.IMAGEKIT_URL_ENDPOINT);
+const imagekit = imagekitConfigured
+    ? new ImageKit({
+        publicKey: process.env.IMAGEKIT_PUBLIC_KEY,
+        privateKey: process.env.IMAGEKIT_PRIVATE_KEY,
+        urlEndpoint: process.env.IMAGEKIT_URL_ENDPOINT
+    })
+    : null;
 
 
 // Services
 const { extractTextFromPdf } = require('./services/pdfService');
-const { generateQuestions, generateDynamicInterviewChat, generateCodingChallenge, evaluateCode, generateFeedback } = require('./services/aiService');
-const { register, login, authMiddleware, getUserById } = require('./services/authService');
-const { 
-  createInterview, 
-  saveAnswers, 
-  saveCodingResult, 
-  saveFeedback, 
-  getUserInterviews, 
-  getInterviewById 
+const { describeProvider, stats: aiStats } = require('./services/llm');
+const { AppError } = require('./services/appError');
+const { register, login, authMiddleware, getUserById, JWT_SECRET } = require('./services/authService');
+const {
+  getQuota,
+  assertCanStartInterview,
+  getActiveInterview,
+  createInterview,
+  getUserInterviews,
+  getInterviewById
 } = require('./services/interviewService');
+const {
+  joinInterview,
+  submitAnswer,
+  finishInterview,
+  getOrCreateChallenge,
+  runCode,
+  submitCode,
+  skipCoding,
+  getOrCreateFeedback
+} = require('./services/sessionService');
+const { RESUME_STORE_CHARS, JOB_DESCRIPTION_CHARS } = require('./services/limits');
 
 const app = express();
 
@@ -35,7 +51,6 @@ app.use(express.json());
 const metrics = {
   startedAt:      Date.now(),
   requests:       { total: 0, errors: 0 },
-  ai:             { calls: 0, errors: 0, totalMs: 0, latencies: [] },
   websocket:      { connected: 0, peak: 0, totalSessions: 0 },
   interviews:     { created: 0, finished: 0 },
 };
@@ -43,22 +58,14 @@ const metrics = {
 // Track incoming HTTP requests
 app.use((req, res, next) => {
   metrics.requests.total++;
-  const start = Date.now();
   res.on('finish', () => {
     if (res.statusCode >= 500) metrics.requests.errors++;
-    // Track AI endpoint latency
-    if (req.path.includes('generate') || req.path.includes('feedback')) {
-      const ms = Date.now() - start;
-      metrics.ai.totalMs += ms;
-      metrics.ai.latencies.push(ms);
-      if (metrics.ai.latencies.length > 100) metrics.ai.latencies.shift(); // keep last 100
-    }
   });
   next();
 });
 
 function getAIStats() {
-  const lats = metrics.ai.latencies;
+  const lats = aiStats.latencies;
   if (!lats.length) return { avg: 0, p95: 0, min: 0, max: 0 };
   const s = [...lats].sort((a, b) => a - b);
   return {
@@ -158,12 +165,12 @@ app.get('/monitor', (req, res) => {
     </div>
   </div>
 
-  <p class="section">AI / Ollama Performance</p>
+  <p class="section">AI Performance — ${describeProvider()}</p>
   <div class="grid">
     <div class="card">
       <div class="label">AI Calls Made</div>
-      <div class="value blue">${metrics.ai.calls}</div>
-      <div class="sub-val">Errors: ${metrics.ai.errors}</div>
+      <div class="value blue">${aiStats.calls}</div>
+      <div class="sub-val">Errors: ${aiStats.errors}</div>
     </div>
     <div class="card">
       <div class="label">Avg AI Latency</div>
@@ -174,6 +181,11 @@ app.get('/monitor', (req, res) => {
       <div class="label">AI Min / Max</div>
       <div class="value">${aiSt.min > 0 ? (aiSt.min/1000).toFixed(1) : '—'}s / ${aiSt.max > 0 ? (aiSt.max/1000).toFixed(1) : '—'}s</div>
       <div class="sub-val">Last 100 calls</div>
+    </div>
+    <div class="card">
+      <div class="label">Tokens Used</div>
+      <div class="value blue">${(aiStats.inputTokens + aiStats.outputTokens).toLocaleString()}</div>
+      <div class="sub-val">In: ${aiStats.inputTokens.toLocaleString()} (${aiStats.cachedTokens.toLocaleString()} cached) &nbsp;|&nbsp; Out: ${aiStats.outputTokens.toLocaleString()}</div>
     </div>
     <div class="card">
       <div class="label">Est. Capacity</div>
@@ -199,8 +211,11 @@ app.get('/metrics', (req, res) => {
     `websocket_peak_connections ${metrics.websocket.peak}`,
     `interviews_created_total ${metrics.interviews.created}`,
     `interviews_finished_total ${metrics.interviews.finished}`,
-    `ai_calls_total ${metrics.ai.calls}`,
-    `ai_errors_total ${metrics.ai.errors}`,
+    `ai_calls_total ${aiStats.calls}`,
+    `ai_errors_total ${aiStats.errors}`,
+    `ai_input_tokens_total ${aiStats.inputTokens}`,
+    `ai_cached_input_tokens_total ${aiStats.cachedTokens}`,
+    `ai_output_tokens_total ${aiStats.outputTokens}`,
     `ai_latency_avg_ms ${aiSt.avg}`,
     `ai_latency_p95_ms ${aiSt.p95}`,
     `process_heap_bytes ${process.memoryUsage().heapUsed}`,
@@ -257,7 +272,7 @@ app.post('/auth/login', async (req, res) => {
 app.get('/auth/me', authMiddleware, async (req, res) => {
   try {
     const user = await getUserById(req.userId);
-    res.json({ user });
+    res.json({ user, quota: await getQuota(req.userId) });
   } catch (error) {
     res.status(404).json({ error: error.message });
   }
@@ -265,127 +280,81 @@ app.get('/auth/me', authMiddleware, async (req, res) => {
 
 // INTERVIEW ROUTES (Protected)
 
-// Create interview and generate questions
+// Sends an AppError as-is; anything else is logged and hidden behind a generic message
+function sendError(res, error, context) {
+  if (error instanceof AppError) {
+    return res.status(error.status).json({ error: error.message, code: error.code });
+  }
+  console.error(`${context}:`, error);
+  res.status(500).json({ error: 'Something went wrong. Please try again.', code: 'INTERNAL_ERROR' });
+}
+
+// Resumes are uploaded to ImageKit, so that is the only place the server will download one from
+function isAllowedResumeUrl(url) {
+  try {
+    const { protocol, hostname } = new URL(url);
+    const allowedHosts = ['ik.imagekit.io'];
+    if (process.env.IMAGEKIT_URL_ENDPOINT) allowedHosts.push(new URL(process.env.IMAGEKIT_URL_ENDPOINT).hostname);
+    return protocol === 'https:' && allowedHosts.includes(hostname);
+  } catch {
+    return false;
+  }
+}
+
+// Collapse the stray spacing PDF extraction leaves behind, so the same resume costs fewer tokens
+function tidyText(text) {
+  return String(text || '').replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, '\n').trim();
+}
+
+// How many interviews the user has left, and any interview they can resume
+app.get('/interviews/quota', authMiddleware, async (req, res) => {
+  try {
+    const [quota, active] = await Promise.all([getQuota(req.userId), getActiveInterview(req.userId)]);
+    res.json({ quota, active });
+  } catch (error) {
+    sendError(res, error, 'Error fetching quota');
+  }
+});
+
+// Create interview
 app.post('/interviews', authMiddleware, async (req, res) => {
   const { resumeURL, jobDescription, resumeText } = req.body;
-  
+
   // Require either resumeURL or resumeText/jobDescription
   if (!resumeURL && !resumeText && !jobDescription) {
     return res.status(400).json({ error: 'resumeURL, resumeText, or jobDescription is required' });
   }
-  
-  try {
-    console.log(`Creating interview for user ${req.userId}`);
-    
-    // Extract text from PDF OR use provided text
-    let text = resumeText || "";
-    if (resumeURL && !text && !resumeURL.includes('manual-entry.local')) {
-        try {
-            text = await extractTextFromPdf(resumeURL);
-        } catch (err) {
-            console.warn("Failed to extract PDF, using job description fallback", err);
-            text = jobDescription || "General Interview";
-        }
-    } else if (!text) {
-        text = jobDescription || "General Interview";
-    }
-
-    // Use 10 placeholder slots — the dynamic WebSocket chat overwrites them
-    // with the actual questions/answers asked during the live session.
-    // This avoids slow/unreliable JSON generation from small local models.
-    const placeholderQuestions = Array.from({ length: 10 }, (_, i) => ({
-      question: `Dynamic question ${i + 1}`,
-      answer: 'Will be populated during live interview session.',
-    }));
-    
-    // Save to database
-    const interview = await createInterview(req.userId, resumeURL || 'manual-entry.local', jobDescription, placeholderQuestions);
-    
-    console.log(`Interview ${interview.id} created instantly with placeholder questions.`);
-    metrics.interviews.created++;
-    res.status(201).json({ interview, questions: placeholderQuestions });
-  } catch (error) {
-    console.error('Error creating interview:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Save user answers
-app.put('/interviews/:id/answers', authMiddleware, async (req, res) => {
-  const interviewId = parseInt(req.params.id);
-  const { answers } = req.body;
-  
-  try {
-    await saveAnswers(interviewId, answers);
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Error saving answers:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Dynamic conversational AI chat during live interview
-app.post('/interviews/:id/chat', authMiddleware, async (req, res) => {
-  const { conversationHistory, questionsAsked, timeExpiring, resumeText: bodyResume, jobDescription: bodyJob } = req.body;
-  const interviewId = parseInt(req.params.id);
 
   try {
-    let resumeText = bodyResume || '';
-    let jobDescription = bodyJob || '';
+    await assertCanStartInterview(req.userId);
 
-    // If valid interviewId, fetch from DB (overrides body values)
-    if (interviewId && !isNaN(interviewId)) {
+    // Extract the resume text once, here, so no later step has to download the PDF again
+    let text = tidyText(resumeText);
+    if (resumeURL && !text) {
+      if (!isAllowedResumeUrl(resumeURL)) {
+        throw new AppError(400, 'INVALID_RESUME_URL', 'That resume link is not valid. Please upload the PDF again.');
+      }
       try {
-        const { getInterviewById } = require('./services/interviewService');
-        const interview = await getInterviewById(interviewId, req.userId);
-        resumeText = interview.resumeURL || bodyResume || '';
-        jobDescription = interview.jobDescription || bodyJob || '';
-      } catch (_) {
-        // Interview not found or unauthorised — use body values
+        text = tidyText(await extractTextFromPdf(resumeURL));
+      } catch {
+        text = '';
+      }
+      if (!text) {
+        throw new AppError(422, 'UNREADABLE_RESUME', 'We could not read any text from that PDF. Upload a text-based PDF, or enter your details manually.');
       }
     }
 
-    const aiReply = await generateDynamicInterviewChat(
-      resumeText,
-      jobDescription,
-      conversationHistory || [],
-      questionsAsked || 0,
-      timeExpiring || false
-    );
+    const interview = await createInterview(req.userId, {
+      resumeURL: resumeURL || 'manual-entry.local',
+      resumeText: text.slice(0, RESUME_STORE_CHARS),
+      jobDescription: tidyText(jobDescription).slice(0, JOB_DESCRIPTION_CHARS)
+    });
 
-    res.json({ reply: aiReply });
+    console.log(`Interview ${interview.id} created for user ${req.userId}`);
+    metrics.interviews.created++;
+    res.status(201).json({ interview, quota: await getQuota(req.userId) });
   } catch (error) {
-    console.error('Error in /interviews/:id/chat:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-
-// Save coding challenge result
-app.put('/interviews/:id/coding', authMiddleware, async (req, res) => {
-  const interviewId = parseInt(req.params.id);
-  const { challenge, code, result, skipped } = req.body;
-  
-  try {
-    await saveCodingResult(interviewId, challenge, code, result, skipped);
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Error saving coding result:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Save feedback
-app.put('/interviews/:id/feedback', authMiddleware, async (req, res) => {
-  const interviewId = parseInt(req.params.id);
-  const { feedback } = req.body;
-  
-  try {
-    await saveFeedback(interviewId, feedback);
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Error saving feedback:', error);
-    res.status(500).json({ error: error.message });
+    sendError(res, error, 'Error creating interview');
   }
 });
 
@@ -395,102 +364,73 @@ app.get('/interviews', authMiddleware, async (req, res) => {
     const interviews = await getUserInterviews(req.userId);
     res.json({ interviews });
   } catch (error) {
-    console.error('Error fetching interviews:', error);
-    res.status(500).json({ error: error.message });
+    sendError(res, error, 'Error fetching interviews');
   }
 });
 
 // Get single interview details
 app.get('/interviews/:id', authMiddleware, async (req, res) => {
   const interviewId = parseInt(req.params.id);
-  
+
   try {
+    if (isNaN(interviewId)) throw new AppError(404, 'NOT_FOUND', 'Interview not found');
     const interview = await getInterviewById(interviewId, req.userId);
     res.json({ interview });
   } catch (error) {
-    console.error('Error fetching interview:', error);
-    res.status(404).json({ error: error.message });
+    sendError(res, error, 'Error fetching interview');
   }
 });
 
-// PUBLIC AI ROUTES (for backward compatibility)
+// CODING ROUND — one stored challenge per interview, evaluated on the server
 
-app.post('/generate-questions', async (req, res) => {
-  const { resumeURL, jobDescription, resumeText } = req.body;
-
-  if (!resumeURL && !resumeText) {
-    return res.status(400).json({ error: 'resumeURL or resumeText is required' });
-  }
-
+app.post('/interviews/:id/coding/challenge', authMiddleware, async (req, res) => {
   try {
-    let text = resumeText || "";
-    if (resumeURL && !text) {
-        console.log(`Processing resume from: ${resumeURL}`);
-        text = await extractTextFromPdf(resumeURL);
-        console.log('PDF text extracted successfully.');
-    }
-    
-    // If we still have no text (e.g. empty resumeText), ensure we have something
-    if (!text && jobDescription) text = "No resume provided. Focus on Job Description.";
-
-    const questions = await generateQuestions(text, jobDescription);
-    console.log('Questions generated successfully.');
-    
-    res.json({ questions });
+    res.json({ challenge: await getOrCreateChallenge(req.params.id, req.userId) });
   } catch (error) {
-    console.error('Error generating interview questions:', error);
-    res.status(500).json({ error: error.message });
+    sendError(res, error, 'Error loading coding challenge');
   }
 });
 
-app.post('/generate-coding-question', async (req, res) => {
-  const { resumeURL, resumeText } = req.body;
-  
-  if (!resumeURL && !resumeText) return res.status(400).json({ error: 'resumeURL or resumeText is required' });
-
+app.post('/interviews/:id/coding/run', authMiddleware, async (req, res) => {
   try {
-    let text = resumeText || "";
-    if (resumeURL && !text) {
-        text = await extractTextFromPdf(resumeURL);
-    }
-    
-    const challenge = await generateCodingChallenge(text);
-    res.json({ challenge });
+    res.json({ challenge: await runCode(req.params.id, req.userId, req.body) });
   } catch (error) {
-    console.error('Error generating coding challenge:', error);
-    res.status(500).json({ error: error.message });
+    sendError(res, error, 'Error evaluating code');
   }
 });
 
-app.post('/evaluate-code', async (req, res) => {
-  const { code, language, problem } = req.body;
-  
-  if (!code || !problem) return res.status(400).json({ error: 'Code and problem are required' });
-
+app.post('/interviews/:id/coding/submit', authMiddleware, async (req, res) => {
   try {
-    const result = await evaluateCode(code, language, problem);
-    res.json({ result });
+    res.json({ challenge: await submitCode(req.params.id, req.userId, req.body) });
   } catch (error) {
-    console.error('Error evaluating code:', error);
-    res.status(500).json({ error: error.message });
+    sendError(res, error, 'Error submitting code');
   }
 });
 
-app.post('/generate-feedback', async (req, res) => {
-  const { interviewData, codingData } = req.body;
-  
+app.post('/interviews/:id/coding/skip', authMiddleware, async (req, res) => {
   try {
-    const feedback = await generateFeedback(interviewData, codingData);
-    res.json({ feedback });
+    res.json(await skipCoding(req.params.id, req.userId));
   } catch (error) {
-    console.error('Error generating feedback:', error);
-    res.status(500).json({ error: error.message });
+    sendError(res, error, 'Error skipping coding round');
+  }
+});
+
+// FEEDBACK — generated once on the server from the stored interview, then read back
+
+app.post('/interviews/:id/feedback', authMiddleware, async (req, res) => {
+  try {
+    res.json({ feedback: await getOrCreateFeedback(req.params.id, req.userId) });
+  } catch (error) {
+    sendError(res, error, 'Error generating feedback');
   }
 });
 
 // IMAGEKIT AUTH
 
-app.get('/imagekit-auth', function (req, res) {
+app.get('/imagekit-auth', authMiddleware, function (req, res) {
+    if (!imagekit) {
+        return res.status(503).send("Resume upload is not configured");
+    }
     try {
         var result = imagekit.getAuthenticationParameters();
         res.send(result);
@@ -510,31 +450,35 @@ const io = new Server(httpServer, {
   }
 });
 
-// ─── Interview WebSocket namespace ────────────────────────────────────────────
+// ─── Interview WebSocket ──────────────────────────────────────────────────────
 const jwt = require('jsonwebtoken');
-const SOCKET_JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 
+// Every interview event spends tokens or changes an interview, so sockets must be signed in
 io.use((socket, next) => {
-  // Allow token via handshake auth or query
   const token = socket.handshake.auth?.token || socket.handshake.query?.token;
-  console.log(`[Socket] Middleware: token present = ${!!token}`);
-  if (!token) {
-    // Allow anonymous connection for graceful fallback
-    socket.userId = null;
-    return next();
-  }
   try {
-    const decoded = jwt.verify(token, SOCKET_JWT_SECRET);
+    const decoded = jwt.verify(token, JWT_SECRET);
     socket.userId = decoded.userId || decoded.id;
-    console.log(`[Socket] Middleware: userId = ${socket.userId}`);
     next();
-  } catch (err) {
-    console.error('[Socket] JWT verify failed:', err.message);
-    // Don't block — let it connect anonymously
-    socket.userId = null;
-    next();
+  } catch {
+    next(new Error('unauthorized'));
   }
 });
+
+// Runs a session action and answers the client's acknowledgement with the new interview state
+async function respond(reply, context, action) {
+  const ack = typeof reply === 'function' ? reply : () => {};
+  try {
+    ack({ ok: true, state: await action() });
+  } catch (error) {
+    if (!(error instanceof AppError)) console.error(`[Socket] ${context}:`, error);
+    ack({
+      ok: false,
+      code: error instanceof AppError ? error.code : 'INTERNAL_ERROR',
+      error: error instanceof AppError ? error.message : 'Something went wrong. Please try again.'
+    });
+  }
+}
 
 io.on('connection', (socket) => {
   console.log(`[Socket] Connected: ${socket.id} (user ${socket.userId})`);
@@ -542,89 +486,31 @@ io.on('connection', (socket) => {
   metrics.websocket.totalSessions++;
   if (metrics.websocket.connected > metrics.websocket.peak) metrics.websocket.peak = metrics.websocket.connected;
 
-  // Client sends this to start / continue the conversation.
-  // Payload: { interviewId, conversationHistory, questionsAsked, timeExpiring, resumeText, jobDescription }
-  socket.on('interview:message', async (payload) => {
-    try {
-      const {
-        interviewId,
-        conversationHistory = [],
-        questionsAsked = 0,
-        timeExpiring = false,
-        resumeText: bodyResume = '',
-        jobDescription: bodyJob = ''
-      } = payload;
+  // Each event is acknowledged with { ok, state } — the full interview state as stored on the
+  // server — so the client can always redraw from it, including after a refresh or reconnect.
 
-      let resumeText = bodyResume;
-      let jobDescription = bodyJob;
-
-      // Try to enrich with DB data — also extract PDF text if only a URL was stored
-      if (interviewId && !isNaN(Number(interviewId))) {
-        try {
-          const interview = await getInterviewById(Number(interviewId), socket.userId);
-          if (interview.jobDescription) jobDescription = interview.jobDescription;
-
-          // If we don't have resume text but have a PDF URL, extract it now
-          if (!resumeText && interview.resumeURL && !interview.resumeURL.includes('manual-entry.local')) {
-            try {
-              resumeText = await extractTextFromPdf(interview.resumeURL);
-              console.log(`[Socket] Extracted resume text from PDF (${resumeText.length} chars)`);
-            } catch (pdfErr) {
-              console.warn('[Socket] PDF extraction failed, using empty resume text');
-            }
-          }
-        } catch (_) {/* not fatal */}
-      }
-
-      console.log(`[Socket] Context — resumeText: ${resumeText ? resumeText.substring(0, 80) + '...' : 'EMPTY'} | job: ${jobDescription ? jobDescription.substring(0, 60) + '...' : 'EMPTY'}`);
-
-      // Signal that AI is thinking
-      socket.emit('interview:thinking', true);
-
-      metrics.ai.calls++;
-      const aiStart = Date.now();
-      const reply = await generateDynamicInterviewChat(
-        resumeText,
-        jobDescription,
-        conversationHistory,
-        questionsAsked,
-        timeExpiring
-      );
-      metrics.ai.latencies.push(Date.now() - aiStart);
-      if (metrics.ai.latencies.length > 100) metrics.ai.latencies.shift();
-
-      socket.emit('interview:thinking', false);
-      socket.emit('interview:reply', { text: reply });
-    } catch (err) {
-      console.error('[Socket] interview:message error', err);
-      socket.emit('interview:error', err.message);
-    }
+  // Enter or re-enter the interview room. Payload: { interviewId }
+  socket.on('interview:join', (payload, reply) => {
+    respond(reply, 'interview:join', () => joinInterview(payload?.interviewId, socket.userId));
   });
 
-  // Client sends full transcript at the end for saving
-  socket.on('interview:save', async (payload) => {
-    try {
-      const { interviewId, transcript } = payload;
-      if (!interviewId || !transcript) return;
+  // The candidate's answer; the state that comes back includes the interviewer's reply.
+  // Payload: { interviewId, text }
+  socket.on('interview:answer', (payload, reply) => {
+    respond(reply, 'interview:answer', async () => {
+      const state = await submitAnswer(payload?.interviewId, socket.userId, payload?.text);
+      if (state.status === 'ended') metrics.interviews.finished++;
+      return state;
+    });
+  });
 
-      const pairs = [];
-      let pairIdx = 0;
-      for (let i = 0; i < transcript.length - 1; i++) {
-        if (transcript[i].speaker === 'ai' && transcript[i + 1]?.speaker === 'user') {
-          pairs.push({
-            questionIndex: pairIdx++,
-            dynamicQuestion: transcript[i].text,
-            dynamicAnswer: transcript[i + 1].text
-          });
-        }
-      }
-
-      await saveAnswers(Number(interviewId), pairs);
-      socket.emit('interview:saved', { success: true });
-    } catch (err) {
-      console.error('[Socket] interview:save error', err);
-      socket.emit('interview:error', err.message);
-    }
+  // The candidate ended the call. Payload: { interviewId }
+  socket.on('interview:end', (payload, reply) => {
+    respond(reply, 'interview:end', async () => {
+      const state = await finishInterview(payload?.interviewId, socket.userId);
+      metrics.interviews.finished++;
+      return state;
+    });
   });
 
   socket.on('disconnect', () => {
@@ -636,4 +522,6 @@ io.on('connection', (socket) => {
 const PORT = process.env.PORT || 5001;
 httpServer.listen(PORT, () => {
     console.log(`Server Running on port ${PORT} (HTTP + WebSocket)`);
+    console.log(`AI provider: ${describeProvider()}`);
+    if (!imagekitConfigured) console.warn('ImageKit keys are not set: resume upload is disabled (manual entry still works).');
 });
