@@ -82,7 +82,7 @@ export default function InterviewSessionPage() {
   // timer
   const [secsLeft, setSecsLeft] = useState<number | null>(null);
   const deadlineRef     = useRef<number | null>(null);   // when the interview runs out of time
-  const lastActivityRef = useRef(Date.now());
+  const lastActivityRef = useRef(0);   // set when the candidate enters the call
 
   // hardware
   const [micEnabled, setMicEnabled] = useState(true);
@@ -113,6 +113,8 @@ export default function InterviewSessionPage() {
   const sttFinalRef      = useRef('');     // finalised speech for the current answer
   const answersUsedRef   = useRef(0);      // answers the server has recorded
   const silenceTimerRef  = useRef<NodeJS.Timeout | null>(null);
+  const autoSendAtRef    = useRef<number | null>(null);  // when a spoken answer will send itself
+  const [autoSendIn, setAutoSendIn] = useState<number | null>(null);
   const submitRef        = useRef<() => void>(() => {});
   const pendingAnswerRef = useRef<{ text: string; answersBefore: number } | null>(null); // sent, not yet acknowledged
 
@@ -137,12 +139,18 @@ export default function InterviewSessionPage() {
   }, [transcript, isThinking]);
 
   // Speech helpers
+  const cancelAutoSend = useCallback(() => {
+    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    autoSendAtRef.current = null;
+    setAutoSendIn(null);
+  }, []);
+
   const stopListening = useCallback(() => {
     wantListenRef.current = false;
-    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    cancelAutoSend();
     try { recognitionRef.current?.stop(); } catch (_) {}
     setIsListening(false);
-  }, []);
+  }, [cancelAutoSend]);
 
   const startListening = useCallback(() => {
     if (!recognitionRef.current || !micEnabledRef.current || endedRef.current || finishedRef.current) return;
@@ -322,6 +330,7 @@ export default function InterviewSessionPage() {
   useEffect(() => {
     if (phase !== 'active') return;
     const timer = setInterval(() => {
+      setAutoSendIn(autoSendAtRef.current === null ? null : Math.max(0, Math.ceil((autoSendAtRef.current - Date.now()) / 1000)));
       if (deadlineRef.current === null) return;
       const left = Math.round((deadlineRef.current - Date.now()) / 1000);
       setSecsLeft(left);
@@ -374,12 +383,14 @@ export default function InterviewSessionPage() {
         lastActivityRef.current = Date.now();
         setAnswer(combined);
 
+        // Every new word pushes the auto-send back; 8s with nothing heard sends what is in the box,
+        // including words the recogniser never marked as final
         if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+        autoSendAtRef.current = Date.now() + SILENCE_SUBMIT_MS;
         silenceTimerRef.current = setTimeout(() => {
-          // Only auto-submit after 8s of silence AND at least 5 words spoken
-          if (wantListenRef.current && sttFinalRef.current.trim().split(/\s+/).length >= 5) {
-            submitRef.current();
-          }
+          autoSendAtRef.current = null;
+          setAutoSendIn(null);
+          if (wantListenRef.current && answerRef.current.trim()) submitRef.current();
         }, SILENCE_SUBMIT_MS);
       };
 
@@ -719,14 +730,18 @@ export default function InterviewSessionPage() {
                   setAnswer(e.target.value);
                   sttFinalRef.current = e.target.value ? e.target.value + ' ' : '';
                   lastActivityRef.current = Date.now();
-                  if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+                  cancelAutoSend();
                   // Auto-grow: reset height, then set to scrollHeight
                   e.target.style.height = 'auto';
                   e.target.style.height = Math.min(e.target.scrollHeight, 180) + 'px';
                 }}
                 onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitAnswer(); } }}
               />
-              <p className="text-xs text-gray-600 mt-1 mb-2">Press Enter to submit · Shift+Enter for new line · or wait 8s after speaking</p>
+              <p className="text-xs mt-1 mb-2">
+                {autoSendIn !== null && autoSendIn <= 5
+                  ? <span className="text-blue-400">Sending in {autoSendIn}s… keep talking or type to hold it</span>
+                  : <span className="text-gray-600">Press Enter to submit · Shift+Enter for new line · or wait 8s after speaking</span>}
+              </p>
               <Button onClick={submitAnswer} disabled={!userAnswer.trim()}
                 className="w-full bg-blue-600 hover:bg-blue-700 cursor-pointer text-white font-medium">
                 Send Reply <Play className="ml-2 w-4 h-4" />

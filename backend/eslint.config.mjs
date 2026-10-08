@@ -17,6 +17,7 @@ export default [
                 fetch: "readonly",
                 AbortController: "readonly",
                 URL: "readonly",
+                AbortSignal: "readonly",
                 module: "readonly",
                 require: "readonly",
                 exports: "readonly",

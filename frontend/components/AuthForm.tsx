@@ -80,6 +80,7 @@ const AuthForm = ({ type }: { type: FormType }) => {
         <form
           onSubmit={form.handleSubmit(onSubmit)}
           className="w-full space-y-5 form"
+          method="post" // if the page's script has not loaded yet, a submit must not put the password in the URL
           noValidate
         >
           {!isSign && (

@@ -12,6 +12,14 @@ const SALT_ROUNDS = 10;
 
 // Register a new user
 async function register(name, email, password) {
+  name = String(name).trim();
+  email = String(email).trim().toLowerCase();
+  if (name.length < 2 || name.length > 80) throw new Error('Please enter your name.');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 200) throw new Error('Please enter a valid email.');
+  if (typeof password !== 'string' || password.length < 6 || password.length > 200) {
+    throw new Error('Password must be at least 6 characters.');
+  }
+
   // Check if user already exists
   const existingUser = await prisma.user.findUnique({
     where: { email }
@@ -40,20 +48,22 @@ async function register(name, email, password) {
 
 // Login user and return JWT token
 async function login(email, password) {
-  // Find user
-  const user = await prisma.user.findUnique({
-    where: { email }
-  });
+  email = String(email).trim();
+  password = String(password);
+
+  // Find user. New accounts are stored lower-cased; older ones may have been saved as typed
+  const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } })
+    || await prisma.user.findUnique({ where: { email } });
   
   if (!user) {
-    throw new Error('Email not found. Please register first.');
+    throw new Error('Incorrect email or password.');
   }
   
   // Verify password
   const isValid = await bcrypt.compare(password, user.password);
   
   if (!isValid) {
-    throw new Error('Incorrect password. Please try again.');
+    throw new Error('Incorrect email or password.');
   }
   
   // Generate JWT token
