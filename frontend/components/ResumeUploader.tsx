@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { IKContext, IKUpload } from 'imagekitio-react';
 import { Loader2, CheckCircle, UploadCloud, AlertTriangle } from 'lucide-react';
+import { getToken } from '@/lib/auth';
 
 const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
 const urlEndpoint = process.env.NEXT_PUBLIC_IMAGEKIT_URL_ENDPOINT;
@@ -21,7 +22,9 @@ export default function ResumeUploader({ onUploadSuccess, onUploadStart, classNa
 
   const authenticatior = async () => {
     try {
-      const response = await fetch(`${backendUrl}/imagekit-auth`);
+      const response = await fetch(`${backendUrl}/imagekit-auth`, {
+        headers: { 'Authorization': `Bearer ${getToken()}` }
+      });
   
       if (!response.ok) {
         throw new Error(`Authentication request failed: ${response.statusText}`);

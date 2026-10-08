@@ -1,11 +1,13 @@
 "use client";
 
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import Editor from '@monaco-editor/react';
-import { generateCodingChallenge, evaluateCode } from '@/lib/api';
+import { getCodingChallenge, runCode, submitCode, skipCoding, ApiError, CodingChallenge } from '@/lib/api';
+import { isAuthenticated } from '@/lib/auth';
+import { getCurrentInterviewId } from '@/lib/currentInterview';
 import { Button } from '@/components/ui/button';
 import { useRouter } from 'next/navigation';
-import { Terminal, AlertTriangle, Play, CheckCircle, XCircle, Keyboard, Loader2 } from 'lucide-react';
+import { AlertTriangle, Play, CheckCircle, XCircle, Keyboard, Loader2 } from 'lucide-react';
 
 const SUPPORTED_LANGUAGES = [
   { value: 'javascript', label: 'JavaScript' },
@@ -63,25 +65,39 @@ fn solve(input: &str) -> String {
 }`
 };
 
+// Helper to fix double escaped newlines from AI
+const formatContent = (content: string | null | undefined) => {
+  if (!content) return "";
+  return content.replace(/\\n/g, '\n');
+};
+
+// The editor's contents are kept in the browser per interview, so a refresh keeps unsaved work
+const draftKey = (interviewId: number) => `codingDraft:${interviewId}`;
+
+function readDraft(interviewId: number): { code: string; language: string } | null {
+  try {
+    return JSON.parse(localStorage.getItem(draftKey(interviewId)) || 'null');
+  } catch {
+    return null;
+  }
+}
+
 export default function CodingRoundPage() {
   const router = useRouter();
-  
-  // State for flow control
-  const [step, setStep] = useState<'selection' | 'coding' | 'finished'>('selection');
-  const [totalQuestions, setTotalQuestions] = useState(1);
-  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
-  
+  const interviewIdRef = useRef<number | null>(null);
+
   // Challenge & Editor State
-  const [challenge, setChallenge] = useState<any>(null);
-  const [code, setCode] = useState("// Loading starter code...");
-  const [output, setOutput] = useState<any>(null);
-  const [loading, setLoading] = useState(false);
+  const [challenge, setChallenge] = useState<CodingChallenge | null>(null);
+  const [code, setCode] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [evaluating, setEvaluating] = useState(false);
+  const [runError, setRunError] = useState('');
   const [selectedLanguage, setSelectedLanguage] = useState('javascript');
   const [isNavigating, setIsNavigating] = useState(false);
-  
+
   // Resizable Output State
-  const [outputHeight, setOutputHeight] = useState(300); 
+  const [outputHeight, setOutputHeight] = useState(300);
   const [isDragging, setIsDragging] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -90,13 +106,13 @@ export default function CodingRoundPage() {
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (!isDragging || !containerRef.current) return;
-      
+
       const containerRect = containerRef.current.getBoundingClientRect();
       const newHeight = containerRect.bottom - e.clientY;
-      
+
       // Clamp height: Min 40px, Max 85% of container height
       const maxHeight = containerRect.height * 0.85;
-      
+
       // Use clamping instead of conditional updated to avoid "stuck" feeling
       const clampedHeight = Math.max(40, Math.min(newHeight, maxHeight));
       setOutputHeight(clampedHeight);
@@ -124,225 +140,142 @@ export default function CodingRoundPage() {
     e.preventDefault();
     setIsDragging(true);
   };
-  
-  // Results tracking
-  const [results, setResults] = useState<any[]>([]);
 
-  const hasStartedFetch = useRef(false);
+  // The challenge is generated once and stored with the interview, so loading it again
+  // (a refresh, a retry) always shows the same problem.
+  const loadChallenge = useCallback(async () => {
+    const id = interviewIdRef.current;
+    if (!id) return;
+    setLoading(true);
+    setLoadError('');
 
-  // Initial Check (Resume)
-  useEffect(() => {
-    const resumeURL = localStorage.getItem('resumeURL');
-    const resumeText = localStorage.getItem('practiceResumeText');
-    
-    if (!resumeURL && !resumeText) {
-      alert("Resume context missing. Please start a new interview.");
-      router.push('/interview/create');
+    try {
+      const data = await getCodingChallenge(id);
+      setChallenge(data);
+
+      const draft = readDraft(id);
+      const language = draft?.language || (BOILERPLATES[data.language] ? data.language : 'javascript');
+      setSelectedLanguage(language);
+      // Unsaved edits first, then the last submitted code, then the starter
+      setCode(draft?.code ?? data.userCode ?? (formatContent(data.starterCode) || BOILERPLATES[language]));
+    } catch (error: any) {
+      if (error instanceof ApiError && error.code === 'INTERVIEW_COMPLETED') {
+        router.replace('/interview/feedback');
+        return;
+      }
+      console.error('Failed to load challenge:', error);
+      setLoadError(error.message || 'Failed to load the coding challenge.');
+    } finally {
+      setLoading(false);
     }
   }, [router]);
 
-  // Fetch Challenge when entering 'coding' step or incrementing index
   useEffect(() => {
-    if (step === 'coding' && !challenge && !loading) {
-      fetchChallenge();
-    }
-  }, [step, currentQuestionIndex]);
+    if (!isAuthenticated()) { router.push('/sign-in'); return; }
+    const id = getCurrentInterviewId();
+    if (!id) { router.push('/interview/create'); return; }
+    interviewIdRef.current = id;
+    loadChallenge();
+  }, [router, loadChallenge]);
 
-  // Update Boilerplate on Language Change
-  useEffect(() => {
-    const isBoilerplate = Object.values(BOILERPLATES).some(bp => code === bp) || code === "// Loading starter code..." || code.startsWith("// Write your solution");
-    
-    if (isBoilerplate) {
-      setCode(BOILERPLATES[selectedLanguage] || "// Write your solution here");
-    }
-  }, [selectedLanguage]);
-
-  // Helper to fix double escaped newlines from AI
-  const formatContent = (content: string) => {
-    if (!content) return "";
-    return content.replace(/\\n/g, '\n');
+  const saveDraft = (nextCode: string, language: string) => {
+    const id = interviewIdRef.current;
+    if (id) localStorage.setItem(draftKey(id), JSON.stringify({ code: nextCode, language }));
   };
 
-  const fetchChallenge = async (retryCount = 0) => {
-     setLoading(true);
-     setChallenge(null);
-     setOutput(null);
-     // Reset height for new challenge if needed, or keep user preference
-     setCode("// Generating personalized challenge...");
-     
-     try {
-         const resumeURL = localStorage.getItem('resumeURL') || "";
-         const resumeText = localStorage.getItem('practiceResumeText') || "";
-         
-         if (!resumeURL && !resumeText) return;
-         
-         const data = await generateCodingChallenge(resumeURL, resumeText);
-         
-         // Basic validation of challenge data
-         if (!data || !data.title || !data.problemStatement) {
-           throw new Error("Invalid challenge data received");
-         }
-
-         setChallenge(data);
-         
-         // Prefer generated starter code if available, else boilerplate
-         const starter = data.starterCode || BOILERPLATES[data.language || 'javascript'] || BOILERPLATES['javascript'];
-         setCode(formatContent(starter));
-         
-         if (data.language && BOILERPLATES[data.language]) {
-             setSelectedLanguage(data.language);
-         }
-         
-         localStorage.setItem('currentCodingChallenge', JSON.stringify(data));
-         setLoading(false);
-     } catch (error) {
-         console.error(`Failed to load challenge (Attempt ${retryCount + 1}):`, error);
-         
-         if (retryCount < 2) {
-           // Retry after a small delay
-           setTimeout(() => fetchChallenge(retryCount + 1), 1000);
-           return;
-         }
-         
-         alert("Failed to generate a coding challenge. Please try again or skip.");
-         setCode("// Failed to load challenge. Please refresh or try again.");
-     } finally {
-         if (retryCount >= 2 || (challenge && !loading)) {
-           setLoading(false);
-         }
-     }
+  const handleCodeChange = (value: string) => {
+    setCode(value);
+    saveDraft(value, selectedLanguage);
   };
 
-  const handleStartCoding = () => {
-    setStep('coding');
-    setCurrentQuestionIndex(0);
-    setResults([]);
+  // Swap in the new language's boilerplate, unless the candidate has started writing
+  const handleLanguageChange = (language: string) => {
+    const untouched = !code.trim()
+      || Object.values(BOILERPLATES).includes(code)
+      || code === formatContent(challenge?.starterCode);
+    const nextCode = untouched ? (BOILERPLATES[language] || "// Write your solution here") : code;
+    setSelectedLanguage(language);
+    setCode(nextCode);
+    saveDraft(nextCode, language);
   };
 
   const handleRun = async () => {
-      if (!challenge || evaluating) return;
+      const id = interviewIdRef.current;
+      if (!id || !challenge || evaluating) return;
       setEvaluating(true);
-      setOutput(null);
+      setRunError('');
        // Ensure output window is visible when running
       if (outputHeight < 100) setOutputHeight(300);
       try {
-          const result = await evaluateCode(code, selectedLanguage, challenge);
-          setOutput(result);
-      } catch (error) {
+          setChallenge(await runCode(id, code, selectedLanguage));
+      } catch (error: any) {
           console.error("Evaluation failed", error);
+          setRunError(error.message || 'Evaluation failed. Please try again.');
       } finally {
           setEvaluating(false);
       }
   };
 
-  const handleNextOrFinish = () => {
-     // Save result
-     const newResults = [...results, {
-         challenge,
-         code,
-         output: output || { passed: false, feedback: "Skipped/Submitted without run" },
-         passed: output?.passed || false
-     }];
-     setResults(newResults);
+  const goToFeedback = () => {
+    const id = interviewIdRef.current;
+    if (id) localStorage.removeItem(draftKey(id));
+    router.push('/interview/feedback');
+  };
 
-     if (currentQuestionIndex < totalQuestions - 1) {
-         // Next question
-         setCurrentQuestionIndex(prev => prev + 1);
-         setChallenge(null); // Triggers fetch effect
-         setOutput(null);
-     } else {
-         // Finish
-         finishRound(newResults);
+  const handleFinish = async () => {
+     const id = interviewIdRef.current;
+     if (!id || isNavigating) return;
+     setIsNavigating(true);
+     try {
+         await submitCode(id, code);
+         goToFeedback();
+     } catch (error: any) {
+         setRunError(error.message || 'Could not save your code. Please try again.');
+         setIsNavigating(false);
      }
   };
 
-  const finishRound = (finalResults: any[]) => {
-     if (isNavigating) return;
+  const handleSkip = async () => {
+     const id = interviewIdRef.current;
+     if (!id || isNavigating) return;
      setIsNavigating(true);
-     
-     // Save aggregate results
-     localStorage.setItem('codingResults', JSON.stringify(finalResults));
-     // Legacy support for feedback page (uses singular 'codingResult' etc based on last one or aggregated)
-     localStorage.setItem('codingResult', JSON.stringify({ 
-         passed: finalResults.every(r => r.passed), 
-         feedback: `Completed ${finalResults.length} challenges. Passed: ${finalResults.filter(r => r.passed).length}/${finalResults.length}`,
-         detailed: finalResults 
-     }));
-     
-     router.push('/interview/feedback');
+     try {
+         await skipCoding(id);
+         goToFeedback();
+     } catch (error: any) {
+         const message = error.message || 'Could not skip the coding round. Please try again.';
+         if (challenge) setRunError(message); else setLoadError(message);
+         setIsNavigating(false);
+     }
   };
 
-  // --- RENDER: SELECTION SCREEN ---
-  if (step === 'selection') {
-      return (
-          <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-slate-950/50">
-            <div className="max-w-md w-full bg-card border rounded-xl p-8 text-center shadow-lg">
-              <div className="flex justify-center mb-6">
-                <Terminal className="h-16 w-16 text-primary" />
-              </div>
-              <h1 className="text-2xl font-bold mb-2">Coding Round Setup</h1>
-              <p className="text-muted-foreground mb-8">
-                Select how many coding challenges you'd like to attempt. 
-                Challenges are personalized based on your resume.
-              </p>
-              
-              <div className="flex flex-col gap-6">
-                <div>
-                    <label className="block text-sm font-medium mb-3">Number of Questions</label>
-                    <div className="flex justify-center gap-2">
-                        {[1, 2, 3, 4, 5].map(num => (
-                            <button
-                                key={num}
-                                onClick={() => setTotalQuestions(num)}
-                                className={`w-12 h-12 rounded-lg text-lg font-bold border transition-all ${
-                                    totalQuestions === num 
-                                    ? 'bg-primary text-primary-foreground border-primary ring-2 ring-primary/50' 
-                                    : 'bg-muted hover:bg-muted/80'
-                                }`}
-                            >
-                                {num}
-                            </button>
-                        ))}
-                    </div>
-                </div>
-
-                <Button 
-                  onClick={handleStartCoding} 
-                  size="lg" 
-                  className="w-full py-6 text-lg cursor-pointer btn-primary"
-                >
-                  Start Coding Round ({totalQuestions} Qs)
-                </Button>
-              </div>
-            </div>
-          </div>
-      );
-  }
-
-  // --- RENDER: LOADING STATE ---
-  if (step === 'coding' && (loading || !challenge)) {
-      if (!loading && !challenge) {
-        return (
-          <div className="min-h-screen flex flex-col items-center justify-center p-10 text-center">
-             <AlertTriangle className="h-12 w-12 text-red-500 mb-4" />
-             <h2 className="text-xl font-bold mb-2">Failed to Load Challenge</h2>
-             <p className="text-muted-foreground mb-6">We couldn't generate a coding problem for you at this time.</p>
-             <div className="flex gap-4">
-               <Button onClick={() => setStep('selection')} variant="outline">Back to Setup</Button>
-               <Button onClick={() => fetchChallenge()} className="btn-primary">Try Again</Button>
-             </div>
-          </div>
-        );
-      }
-
+  // --- RENDER: LOADING / ERROR STATE ---
+  if (loading) {
       return (
         <div className="min-h-screen flex flex-col items-center justify-center p-10 text-center">
           <Loader2 className="h-12 w-12 animate-spin text-primary mb-4" />
-          <p className="text-lg font-medium">Generating Challenge {currentQuestionIndex + 1} of {totalQuestions}...</p>
+          <p className="text-lg font-medium">Preparing your coding challenge...</p>
           <p className="text-sm text-muted-foreground mt-2">(AI is analysing your resume to create a relevant problem)</p>
         </div>
       );
   }
+
+  if (!challenge) {
+      return (
+        <div className="min-h-screen flex flex-col items-center justify-center p-10 text-center">
+           <AlertTriangle className="h-12 w-12 text-red-500 mb-4" />
+           <h2 className="text-xl font-bold mb-2">Failed to Load Challenge</h2>
+           <p className="text-muted-foreground mb-6">{loadError || "We couldn't generate a coding problem for you at this time."}</p>
+           <div className="flex gap-4">
+             <Button onClick={handleSkip} variant="outline" disabled={isNavigating} className="cursor-pointer">Skip &amp; View Feedback</Button>
+             <Button onClick={loadChallenge} disabled={isNavigating} className="btn-primary cursor-pointer">Try Again</Button>
+           </div>
+        </div>
+      );
+  }
+
+  const output = challenge.result;
+  const runsLeft = challenge.runsLeft;
 
   // --- RENDER: CODING INTERFACE ---
   return (
@@ -351,21 +284,21 @@ export default function CodingRoundPage() {
       <div className="w-full md:w-1/3 p-6 border-r border-border overflow-y-auto h-[40vh] md:h-screen">
           <div className="flex justify-between items-center mb-6">
             <div className="text-sm font-medium text-muted-foreground">
-                Question {currentQuestionIndex + 1} / {totalQuestions}
+                Coding Challenge
             </div>
-            <Button 
-              variant="ghost" 
-              size="sm" 
-              onClick={handleNextOrFinish}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleSkip}
               disabled={isNavigating}
               className="text-muted-foreground hover:text-red-500 cursor-pointer"
             >
               Skip
             </Button>
           </div>
-          
+
           <h1 className="text-2xl font-bold mb-4">{challenge.title}</h1>
-          
+
           <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 mb-6">
             <div className="flex items-start gap-2">
                 <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
@@ -374,10 +307,10 @@ export default function CodingRoundPage() {
                 </p>
             </div>
           </div>
-          
+
           <div className="prose dark:prose-invert max-w-none text-sm">
               <p className="mb-4 text-base">{formatContent(challenge.description)}</p>
-              
+
               <div className="bg-muted p-4 rounded-md mb-4 border border-border">
                   <h3 className="font-semibold mb-2">Problem Statement</h3>
                   <div className="whitespace-pre-wrap font-mono text-xs">{formatContent(challenge.problemStatement)}</div>
@@ -390,7 +323,7 @@ export default function CodingRoundPage() {
 
               <h3 className="font-semibold mt-4 mb-2">Example Cases</h3>
               <div className="space-y-2">
-                  {challenge.testCases && Array.isArray(challenge.testCases) ? challenge.testCases.map((tc:any, i:number) => (
+                  {challenge.testCases.length > 0 ? challenge.testCases.map((tc, i) => (
                       <div key={i} className="bg-muted/50 p-2 rounded border border-border font-mono text-xs">
                           <span className="text-muted-foreground">In:</span> {formatContent(tc.input)} <br/>
                           <span className="text-muted-foreground">Out:</span> {formatContent(tc.expectedOutput)}
@@ -408,9 +341,9 @@ export default function CodingRoundPage() {
           <div className="bg-muted/30 border-b border-border px-4 py-2 flex items-center justify-between gap-4">
             <div className="flex items-center gap-3">
                 <label className="text-sm font-medium text-muted-foreground">Language:</label>
-                <select 
+                <select
                   value={selectedLanguage}
-                  onChange={(e) => setSelectedLanguage(e.target.value)}
+                  onChange={(e) => handleLanguageChange(e.target.value)}
                   className="bg-background text-foreground px-3 py-1.5 rounded-md text-sm border border-border focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
                 >
                   {SUPPORTED_LANGUAGES.map((lang) => (
@@ -418,11 +351,14 @@ export default function CodingRoundPage() {
                   ))}
                 </select>
             </div>
-            
-            <div className="flex gap-2">
-                <Button 
-                  onClick={handleRun} 
-                  disabled={evaluating || isNavigating} 
+
+            <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground hidden sm:inline">
+                  {runsLeft} {runsLeft === 1 ? 'run' : 'runs'} left
+                </span>
+                <Button
+                  onClick={handleRun}
+                  disabled={evaluating || isNavigating || runsLeft === 0}
                   size="sm"
                   className="cursor-pointer"
                 >
@@ -432,25 +368,23 @@ export default function CodingRoundPage() {
                         <><Play className="mr-2 h-4 w-4" /> Run & Check</>
                     )}
                 </Button>
-                
-                <Button 
-                  onClick={handleNextOrFinish} 
+
+                <Button
+                  onClick={handleFinish}
                   variant={output?.passed ? "default" : "secondary"} // Highlight if passed
                   size="sm"
-                  disabled={isNavigating}
+                  disabled={isNavigating || evaluating}
                   className={`cursor-pointer ${output?.passed ? 'bg-green-600 hover:bg-green-700 text-white' : ''}`}
                 >
                     {isNavigating ? (
                         <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving...</>
-                    ) : (currentQuestionIndex < totalQuestions - 1 ? (
-                        <>Next Question <Play className="ml-2 h-4 w-4 rotate-180" /></> // Just arrow
                     ) : (
                         <><CheckCircle className="mr-2 h-4 w-4" /> Finish Round</>
-                    ))}
+                    )}
                 </Button>
             </div>
           </div>
-          
+
           {/* Editor */}
           <div className={`flex-1 relative min-h-0 overflow-hidden ${isDragging ? 'pointer-events-none select-none' : ''}`}>
               <Editor
@@ -458,7 +392,7 @@ export default function CodingRoundPage() {
                 language={selectedLanguage}
                 value={code}
                 theme="vs-dark"
-                onChange={(value) => setCode(value || "")}
+                onChange={(value) => handleCodeChange(value || "")}
                 options={{
                     minimap: { enabled: false },
                     fontSize: 14,
@@ -467,26 +401,32 @@ export default function CodingRoundPage() {
                 }}
               />
           </div>
-          
+
           {/* Drag Handle */}
-          <div 
+          <div
             className="h-2 bg-border hover:bg-primary/50 cursor-row-resize flex items-center justify-center transition-colors group"
             onMouseDown={startResizing}
           >
             <div className="w-12 h-1 rounded-full bg-muted-foreground/30 group-hover:bg-primary/70" />
           </div>
-          
+
           {/* Output Console */}
-          <div 
+          <div
             style={{ height: outputHeight }}
             className={`transition-none border-t border-border bg-slate-950 p-4 overflow-y-auto`}
           >
-              {!output && (
+              {runError && (
+                  <div className="mb-3 text-sm text-amber-400 flex items-center gap-2">
+                      <AlertTriangle className="h-4 w-4 shrink-0" /> {runError}
+                  </div>
+              )}
+
+              {!output && !runError && (
                   <div className="text-center text-xs text-muted-foreground pt-1 flex items-center justify-center gap-2 h-full">
                       <Keyboard className="h-4 w-4" /> <span>Write your code and click Run to test</span>
                   </div>
               )}
-              
+
               {output && (
                   <div className={`text-sm font-mono ${output.passed ? "text-green-400" : "text-red-400"}`}>
                       <div className="flex items-center gap-2 mb-2">
@@ -495,12 +435,12 @@ export default function CodingRoundPage() {
                           </span>
                           <span className="font-bold">{output.passed ? "All Test Cases Passed!" : "Execution Failed / Tests Failed"}</span>
                       </div>
-                      
+
                       <p className="whitespace-pre-wrap mb-4 text-foreground/80">{output.feedback}</p>
-                      
-                      {output.testResults && (
+
+                      {output.testResults?.length > 0 && (
                           <div className="space-y-1 bg-black/20 p-2 rounded">
-                              {output.testResults.map((res:any, i:number) => (
+                              {output.testResults.map((res, i) => (
                                   <div key={i} className={`flex gap-2 ${res.passed ? "text-green-500" : "text-red-500"}`}>
                                       <span className="w-16 shrink-0">Test {i+1}:</span>
                                       <span>{res.passed ? "PASS" : `FAIL (Expected: ${res.expected}, Got: ${res.actual})`}</span>

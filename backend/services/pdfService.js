@@ -9,7 +9,9 @@ const pdf = require('pdf-extraction');
 async function extractTextFromPdf(url) {
   try {
     const response = await axios.get(url, {
-      responseType: 'arraybuffer'
+      responseType: 'arraybuffer',
+      timeout: 15000,
+      maxContentLength: 6 * 1024 * 1024 // uploads are capped at 5MB
     });
     const buffer = Buffer.from(response.data);
     const data = await pdf(buffer);

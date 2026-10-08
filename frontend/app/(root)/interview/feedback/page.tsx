@@ -1,134 +1,52 @@
 "use client";
 
-import React, { useEffect, useState, useRef } from 'react';
-import { generateFeedback, saveInterviewCoding, saveInterviewFeedback } from '@/lib/api';
+import React, { useEffect, useState, useCallback } from 'react';
+import { getFeedback, ApiError, InterviewFeedback } from '@/lib/api';
 import { isAuthenticated } from '@/lib/auth';
+import { getCurrentInterviewId, clearCurrentInterview } from '@/lib/currentInterview';
 import { Button } from '@/components/ui/button';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { toast } from 'sonner';
-import { Plane, CheckCircle, AlertCircle, Target, Trophy, ArrowRight, Home, RotateCcw } from 'lucide-react';
+import { CheckCircle, AlertCircle, Target, Trophy, ArrowRight, Home, RotateCcw } from 'lucide-react';
 
 export default function FeedbackPage() {
   const router = useRouter();
-  const [feedback, setFeedback] = useState<any>(null);
+  const [feedback, setFeedback] = useState<InterviewFeedback | null>(null);
   const [loading, setLoading] = useState(true);
-  const [saved, setSaved] = useState(false);
-  const [progress, setProgress] = useState('Initiating analysis...');
-  const hasStartedFetch = useRef(false);
+  const [error, setError] = useState('');
+  const [inProgress, setInProgress] = useState(false);
 
-  useEffect(() => {
-    if (hasStartedFetch.current) return;
-    hasStartedFetch.current = true;
-    
-    // Check if feedback already exists in localStorage
-    const cachedFeedback = localStorage.getItem('generatedFeedback');
-    if (cachedFeedback) {
-      try {
-        const parsed = JSON.parse(cachedFeedback);
-        setFeedback(parsed);
-        setLoading(false);
-        setSaved(true);
-        return;
-      } catch (e) {
-        // Invalid cache, continue to generate
-      }
-    }
-    
-    fetchFeedback();
-  }, []);
+  // The server analyses the interview once and stores the report, so loading this page
+  // again (or opening it in another tab) reads the same report instead of paying for a new one.
+  const fetchFeedback = useCallback(async () => {
+    const interviewId = getCurrentInterviewId();
+    if (!interviewId) { router.push('/interview/history'); return; }
 
-  const fetchFeedback = async () => {
+    setLoading(true);
+    setError('');
     try {
-      const interviewId = localStorage.getItem('interviewId');
-      
-      // Use the actual live conversation transcript (WebSocket session produces this)
-      const rawTranscript = localStorage.getItem('interviewTranscript');
-      let interviewData: any[] = [];
-      
-      if (rawTranscript) {
-        // Real dynamic transcript: [{speaker: 'ai'|'user', text: '...'}, ...]
-        interviewData = JSON.parse(rawTranscript);
-      } else {
-        // Fallback: legacy Q&A format
-        const interviewQuestions = JSON.parse(localStorage.getItem('interviewQuestions') || '[]');
-        const interviewAnswers = JSON.parse(localStorage.getItem('interviewAnswers') || '[]');
-        interviewData = interviewQuestions.map((q: any, i: number) => ({
-          question: q.question || q.questionText,
-          answer: q.answer || q.expectedAnswer,
-          userAnswer: interviewAnswers[i]?.answer || ''
-        }));
-      }
-      
-      const codingChallenge = JSON.parse(localStorage.getItem('codingChallenge') || '{}');
-      const codingResult = JSON.parse(localStorage.getItem('codingResult') || '{}');
-      const codingCode = localStorage.getItem('codingCode') || "";
-      
-      const codingData = {
-          challenge: codingChallenge,
-          code: codingCode,
-          result: codingResult
-      };
-      
-      setProgress(`Analyzing ${interviewData.length} conversation turns... (This may take 20-30s)`);
-      
-      // Generate feedback from AI
-      const data = await generateFeedback(interviewData, codingData);
-      setFeedback(data);
-      
-      // Cache the feedback
-      localStorage.setItem('generatedFeedback', JSON.stringify(data));
-      
-      setProgress('Saving interview data...');
-      
-      // Save to database if authenticated
-      if (isAuthenticated() && interviewId) {
-        const id = parseInt(interviewId);
-        
-        try {
-          await saveInterviewCoding(id, codingChallenge, codingCode, codingResult, codingResult?.skipped || false);
-          await saveInterviewFeedback(id, data);
-          
-          setSaved(true);
-          toast.success('Interview saved to history!');
-        } catch (saveError) {
-          console.error('Failed to save to database:', saveError);
-          toast.error('Failed to save interview data');
-        }
-      }
-    } catch (error) {
-      console.error("Failed to generate feedback", error);
-      toast.error('Analysis failed');
+      setFeedback(await getFeedback(interviewId));
+    } catch (err: any) {
+      console.error("Failed to load feedback", err);
+      setInProgress(err instanceof ApiError && err.code === 'INTERVIEW_IN_PROGRESS');
+      setError(err.message || 'Analysis failed. Please try again.');
     } finally {
       setLoading(false);
     }
-  };
+  }, [router]);
 
+  useEffect(() => {
+    if (!isAuthenticated()) { router.push('/sign-in'); return; }
+    fetchFeedback();
+  }, [router, fetchFeedback]);
 
   const goHome = () => {
-    // Clear interview session data
-    localStorage.removeItem('interviewQuestions');
-    localStorage.removeItem('interviewAnswers');
-    localStorage.removeItem('codingChallenge');
-    localStorage.removeItem('codingResult');
-    localStorage.removeItem('codingCode');
-    localStorage.removeItem('resumeURL');
-    localStorage.removeItem('interviewId');
-    localStorage.removeItem('generatedFeedback');
-    
+    clearCurrentInterview();
     router.push('/');
   };
 
   const startNewInterview = () => {
-    localStorage.removeItem('interviewQuestions');
-    localStorage.removeItem('interviewAnswers');
-    localStorage.removeItem('codingChallenge');
-    localStorage.removeItem('codingResult');
-    localStorage.removeItem('codingCode');
-    localStorage.removeItem('resumeURL');
-    localStorage.removeItem('interviewId');
-    localStorage.removeItem('generatedFeedback');
-    
+    clearCurrentInterview();
     router.push('/interview/create');
   };
 
@@ -140,19 +58,40 @@ export default function FeedbackPage() {
             <Target className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-[130%] text-primary-200 h-6 w-6 animate-pulse" />
         </div>
         <h2 className="text-xl text-white font-bold tracking-wide">ANALYZING INTERVIEW</h2>
-        <p className="text-sm text-light-400 mt-2 max-w-md animate-pulse">{progress}</p>
+        <p className="text-sm text-light-400 mt-2 max-w-md animate-pulse">Analyzing your interview... (This may take 20-30s)</p>
         
         <div className="mt-8 p-4 bg-primary-200/10 border border-primary-200/30 rounded-lg max-w-sm">
           <p className="text-xs text-primary-100 flex items-center gap-2">
             <AlertCircle className="h-4 w-4" /> 
-            <strong>Do not close.</strong> Analysis in progress.
+            Analysis in progress. It is safe to refresh; your report is saved once it is ready.
           </p>
         </div>
       </div>
     );
   }
   
-  if (!feedback) return <div className="p-10 text-center text-red-500">Analysis Failed. Please retry.</div>;
+  if (!feedback) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-6 p-10 text-center bg-dark-100">
+        <AlertCircle className="h-10 w-10 text-destructive-100" />
+        <p className="text-light-100 max-w-md">{error || 'Analysis failed. Please try again.'}</p>
+        <div className="flex flex-wrap justify-center gap-4">
+          {inProgress ? (
+            <Button onClick={() => router.push('/interview/session')} className="btn-primary cursor-pointer">
+              Return to Interview
+            </Button>
+          ) : (
+            <Button onClick={fetchFeedback} className="btn-primary cursor-pointer">
+              <RotateCcw className="mr-2 h-4 w-4" /> Try Again
+            </Button>
+          )}
+          <Button onClick={goHome} variant="ghost" className="text-light-400 hover:text-white hover:bg-white/5 cursor-pointer">
+            <Home className="mr-2 h-4 w-4" /> Return to Dashboard
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen px-4 sm:px-6 lg:px-8 py-8 bg-dark-100">
@@ -185,15 +124,13 @@ export default function FeedbackPage() {
                    <div>
                        <p className="text-light-400 text-sm mb-1">Status</p>
                        <div className="text-xl font-bold text-primary-100 bg-primary-200/20 px-4 py-2 rounded-lg border border-primary-200/30">
-                           {feedback.hiringRecommendation}
+                           {feedback.recommendation}
                        </div>
                    </div>
                    
-                    {saved && (
-                        <div className="ml-auto flex items-center gap-2 text-success-200 text-sm bg-success-200/10 px-3 py-1.5 rounded-full border border-success-200/20">
-                            <CheckCircle className="h-3 w-3" /> Interview Saved
-                        </div>
-                    )}
+                    <div className="ml-auto flex items-center gap-2 text-success-200 text-sm bg-success-200/10 px-3 py-1.5 rounded-full border border-success-200/20">
+                        <CheckCircle className="h-3 w-3" /> Interview Saved
+                    </div>
                </div>
            </div>
         </div>
@@ -285,13 +222,11 @@ export default function FeedbackPage() {
               <RotateCcw className="mr-2 h-4 w-4" /> Start New Interview
             </Button>
             
-            {isAuthenticated() && (
-              <Button asChild size="lg" className="btn-secondary min-w-[200px] cursor-pointer">
-                <Link href="/interview/history">
-                    History <ArrowRight className="ml-2 h-4 w-4" />
-                </Link>
-              </Button>
-            )}
+            <Button asChild size="lg" className="btn-secondary min-w-[200px] cursor-pointer">
+              <Link href="/interview/history">
+                  History <ArrowRight className="ml-2 h-4 w-4" />
+              </Link>
+            </Button>
         </div>
       </div>
     </div>

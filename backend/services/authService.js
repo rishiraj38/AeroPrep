@@ -2,7 +2,12 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { prisma } = require('./prismaClient');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+// Never fall back to a secret that is written in the source: anyone could read it and forge
+// tokens. Without JWT_SECRET the server signs with a random one, so sign-ins last until restart.
+const JWT_SECRET = process.env.JWT_SECRET || require('crypto').randomBytes(48).toString('hex');
+if (!process.env.JWT_SECRET) {
+  console.warn('JWT_SECRET is not set: using a temporary secret, so everyone is signed out on restart.');
+}
 const SALT_ROUNDS = 10;
 
 // Register a new user
@@ -111,6 +116,7 @@ async function getUserById(userId) {
 }
 
 module.exports = {
+  JWT_SECRET,
   register,
   login,
   verifyToken,

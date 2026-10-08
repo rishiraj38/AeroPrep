@@ -5,6 +5,7 @@ import { useRouter, useParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { getInterviewDetail } from '@/lib/api';
 import { isAuthenticated } from '@/lib/auth';
+import { setCurrentInterviewId } from '@/lib/currentInterview';
 import Link from 'next/link';
 
 interface Question {
@@ -40,6 +41,7 @@ interface Interview {
   resumeURL: string;
   jobDescription: string | null;
   status: string;
+  endedAt: string | null;
   createdAt: string;
   questions: Question[];
   codingChallenge: CodingChallenge | null;
@@ -75,6 +77,14 @@ export default function InterviewDetailPage() {
 
     fetchInterview();
   }, [interviewId]);
+
+  // Interviews without a report can be picked back up: the conversation if it is still
+  // open, otherwise the feedback step
+  const continueInterview = () => {
+    if (!interview) return;
+    setCurrentInterviewId(interview.id);
+    router.push(interview.endedAt ? '/interview/feedback' : '/interview/session');
+  };
 
   if (loading) {
     return (
@@ -116,6 +126,11 @@ export default function InterviewDetailPage() {
                 })}
               </p>
             </div>
+            {!interview.feedback && (
+              <Button onClick={continueInterview} className="cursor-pointer">
+                {interview.endedAt ? 'Get Feedback' : 'Resume Interview'}
+              </Button>
+            )}
             {interview.feedback && (
               <div className="text-right">
                 <div className={`text-4xl font-bold ${
@@ -304,7 +319,7 @@ export default function InterviewDetailPage() {
               </>
             ) : (
               <div className="text-center py-10 text-muted-foreground">
-                No feedback data available
+                {interview.endedAt ? 'This interview has not been analysed yet.' : 'This interview is not finished yet.'}
               </div>
             )}
           </div>
