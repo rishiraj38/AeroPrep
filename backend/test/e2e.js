@@ -136,7 +136,7 @@ const newInterview = async (token, extra = {}) => (await api('POST', '/interview
   const fakeUrl = `http://127.0.0.1:${fake.address().port}`;
   const server = spawn(process.execPath, ['index.js'], { cwd: backend, env: { PATH: process.env.PATH, DATABASE_URL, PORT, JWT_SECRET: 'test-secret',
     AI_PROVIDER: 'anthropic', AI_API_KEY: 'sk-ant-test', AI_BASE_URL: fakeUrl, AI_EFFORT: 'low', INTERVIEW_MAX_ANSWERS: '4', FREE_INTERVIEW_LIMIT: '2', CODING_MAX_RUNS: '2', SMTP_USER: '', SMTP_PASS: '',
-    AI_REPLY_TIMEOUT_MS: '1500', INTERVIEW_MAX_FAILED_CALLS: '3' } });
+    AI_REPLY_TIMEOUT_MS: '1500', INTERVIEW_MAX_FAILED_CALLS: '3', VOICE_API_KEY: 'voice-test-key', VOICE_BASE_URL: fakeUrl, VOICE_DAILY_CHARS: '400' } });
   let log = ''; server.stdout.on('data', (d) => log += d); server.stderr.on('data', (d) => log += d);
   for (let i = 0; i < 50 && !log.includes('Server Running'); i++) await new Promise((r) => setTimeout(r, 200));
   const { PrismaClient } = require('@prisma/client');
@@ -484,6 +484,26 @@ const newInterview = async (token, extra = {}) => (await api('POST', '/interview
     const many = await Promise.all(Array.from({ length: 8 }, () => upload(token6, tinyPdf('Queued'))));
     check('uploads beyond a short queue are asked to try again instead of piling up', many.some((m) => m.status === 200) && many.some((m) => m.status === 503 && m.json.code === 'BUSY') && many.every((m) => m.status === 200 || m.status === 503), many.map((m) => m.status).join(','));
 
+    console.log('\n# the interviewer\'s voice');
+    const voice = async (who, id, text) => { const res = await fetch(`${API}/interviews/${id}/voice`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(who ? { Authorization: `Bearer ${who}` } : {}) }, body: JSON.stringify({ text }) }); return { status: res.status, type: res.headers.get('content-type'), bytes: (await res.arrayBuffer()).byteLength, res }; };
+    const vsock = await connect(token5);
+    check('the room is told a natural voice is available', (await emit(vsock, 'interview:join', { interviewId: idO })).state.naturalVoice === true);
+    vsock.disconnect();
+    let v = await voice(token5, idO, 'Tell me about <b>Go</b> & "queues".');
+    check('a sentence comes back as audio', v.status === 200 && v.type === 'audio/wav' && v.bytes > 1000, `${v.status} ${v.type} ${v.bytes}`);
+    check('the text reaches the speech service safely wrapped, with the key', llm.spoken.at(-1).includes('Tell me about &lt;b&gt;Go&lt;/b&gt; &amp; &quot;queues&quot;.') && llm.spoken.at(-1).includes('<voice name="en-US-AndrewNeural">'), llm.spoken.at(-1));
+    check('what was spoken is counted on the interview', (await row(idO)).voiceChars === 'Tell me about <b>Go</b> & "queues".'.length);
+    check('it needs a login, and the caller\'s own interview', (await voice(null, idO, 'hi')).status === 401 && (await voice(token4, idO, 'hi')).status === 404 && (await voice(token5, 'abc', 'hi')).status === 404);
+    check('nothing to say is refused', (await voice(token5, idO, '   ')).status === 400);
+    v = await voice(token5, idO, 'VOICE_FAIL_PLEASE');
+    check('a speech service that fails is reported, not passed on', v.status === 502);
+    v = await voice(token5, idO, 'y'.repeat(5000));
+    check('an over-long sentence is cut to a sentence\'s length before anything else', v.status === 429 && (await row(idO)).voiceChars < 100, String(v.status));
+    await voice(token5, idO, 'y'.repeat(300));
+    const spokenBefore = llm.spoken.length;
+    v = await voice(token5, idO, 'z'.repeat(100));
+    check('past the day\'s allowance nothing more is sent to the speech service', v.status === 429 && llm.spoken.length === spokenBefore, `${v.status} ${llm.spoken.length - spokenBefore}`);
+
     console.log('\n# product feedback');
     check('rating must be 1 to 5', (await api('POST', '/feedback', token, { rating: 9, message: 'x' })).status === 400);
     check('feedback is saved', (await api('POST', '/feedback', token, { rating: 4, message: 'Nice', interviewId: idA })).status === 201 && (await prisma.appFeedback.count()) === 1);
@@ -523,6 +543,8 @@ const newInterview = async (token, extra = {}) => (await api('POST', '/interview
       const first = await remaining({ 'CF-Connecting-IP': '203.0.113.7' });
       const second = await remaining({ 'CF-Connecting-IP': '203.0.113.7' });
       const other = await remaining({ 'CF-Connecting-IP': '198.51.100.9' });
+      const off = await fetch(`${API2}/interviews/${idA}/voice`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ text: 'hello' }) });
+      check('without a speech key the voice route says it is off', off.status === 404 && (await off.json()).code === 'VOICE_OFF');
       check('each visitor gets their own rate-limit bucket behind the edge', second === first - 1 && other === first, `${first},${second},${other}`);
     } finally { server2.kill(); }
   } catch (e) {

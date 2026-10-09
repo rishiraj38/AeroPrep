@@ -69,7 +69,7 @@ backend/
     appError.js            an error that is safe to show the user
   prisma/schema.prisma     the data model
   prisma/migrations/       one folder per schema change
-  test/e2e.js              136 end-to-end checks
+  test/e2e.js              146 end-to-end checks
   test/fake-anthropic.js   a stand-in for the model, for tests
 
 frontend/
@@ -247,7 +247,7 @@ Render sits behind Cloudflare, so the visitor is identified by the `CF-Connectin
 
 - **State from the server.** Every socket acknowledgement carries the full interview state, and the page redraws from it. On every connect and reconnect it sends `interview:join`.
 - **No dead air.** The moment an answer is sent, the page says a short "Okay." or "Right." in Alex's voice while the real reply is being written. The system prompt tells the model this has happened, so it does not open with a second acknowledgement.
-- **Natural voice (optional).** Offered in the lobby on browsers with WebGPU. `lib/neuralVoice.ts` starts `public/voice-worker.js`, which runs the Kokoro speech model in the browser (a one-time download of about 330 MB, then cached) and returns audio for each sentence; the page plays the sentences in order. The choice is remembered. Everyone else hears the browser's built-in voice.
+- **Natural voice.** When the API has a speech service configured (`VOICE_API_KEY`), the room asks `POST /interviews/:id/voice` for each sentence, gets audio back and plays the sentences in order (`lib/serverVoice.ts`, `services/voiceService.js`). Nothing is downloaded or installed. It is capped per interview and per day, and if it is off, over its cap or failing, the page falls back to the browser's built-in voice.
 - **Speaking.** A "turn" is a queue of sentences. Each is one `SpeechSynthesisUtterance`, spoken slightly slower than the browser default, with questions lifted in pitch. Watchdogs handle a browser that never starts or stalls mid-sentence, by falling back to text.
 - **Listening.** Speech recognition fills the answer box. After a pause of the chosen length (3, 5 or 8 seconds, or never) the answer sends itself, with a countdown and a "Not yet" button. The microphone is closed while Alex speaks.
 - **Typing.** The first keystroke stops the microphone for that answer, so nothing is entered twice. A typed answer is never sent automatically.
@@ -258,7 +258,7 @@ Render sits behind Cloudflare, so the visitor is identified by the `CF-Connectin
 
 ## 10. Testing
 
-**Backend, in the repo** (`npm test` in `backend/`): starts the real server against a throwaway PostgreSQL and a stand-in model, and drives it over HTTP and sockets. 136 checks covering access control, the whole interview flow, refresh and reconnect, limits and races, every failure mode of the model, hostile PDFs and rate limits. It runs in GitHub Actions on every push.
+**Backend, in the repo** (`npm test` in `backend/`): starts the real server against a throwaway PostgreSQL and a stand-in model, and drives it over HTTP and sockets. 146 checks covering access control, the whole interview flow, refresh and reconnect, limits and races, every failure mode of the model, hostile PDFs and rate limits. It runs in GitHub Actions on every push.
 
 ```bash
 cd backend
@@ -299,6 +299,7 @@ Backend (`backend/.env`, and the Render dashboard):
 | `AI_MODEL_FAST` | no | quicker model for live turns |
 | `AI_EFFORT` | no | Anthropic only: `low`, `medium`, `high` |
 | `AI_PROVIDER`, `AI_BASE_URL` | no | force a provider or point at a custom endpoint |
+| `VOICE_API_KEY`, `VOICE_REGION`, `VOICE_NAME` | no | speech service for the natural voice (Azure by default) |
 | `SMTP_USER`, `SMTP_PASS` | no | Gmail address and app password for feedback email |
 | `SUPPORT_EMAIL` | no | shown to users, receives feedback |
 | `CORS_ORIGINS` | no | extra sites allowed to call the API |
@@ -324,7 +325,7 @@ The project started with the model called from public routes, state kept in the 
 
 ## 14. Known gaps and what to build next
 
-1. **A natural voice.** The browser voice is the weakest part. A neural voice (Kokoro in the browser is free) would change how the interview feels.
+1. **Turn the natural voice on.** The code is in place; it needs a speech-service key on Render (`VOICE_API_KEY`).
 2. **Server-side speech recognition.** Voice input currently needs Chrome or Edge.
 3. **Running code for real** in a sandbox instead of asking the model to judge it.
 4. **Email verification and password reset.** Without them, a new email address is three more free interviews.

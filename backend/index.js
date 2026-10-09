@@ -11,6 +11,7 @@ const { extractTextFromBuffer, looksLikePdf, MAX_PDF_BYTES } = require('./servic
 const { describeProvider, stats: aiStats } = require('./services/llm');
 const { AppError } = require('./services/appError');
 const { stripControl, cleanCandidateText } = require('./services/text');
+const { speak, describeVoice } = require('./services/voiceService');
 const { register, login, authMiddleware, getUserById, JWT_SECRET } = require('./services/authService');
 const {
   saveAppFeedback,
@@ -105,6 +106,9 @@ const uploadLimiter = limiter(60, 20, 'You have uploaded a lot of resumes. Pleas
 
 // Product feedback, per signed-in user
 const feedbackLimiter = limiter(60, 5, 'Thanks, we have your feedback. Please try again later.', (req) => `user:${req.userId}`);
+
+// Sentences of the interviewer's speech, per signed-in user (an interview needs a few dozen)
+const voiceLimiter = limiter(15, 300, 'The natural voice is busy. Please try again shortly.', (req) => `user:${req.userId}`);
 
 app.use(generalLimiter);
 
@@ -508,6 +512,19 @@ app.post('/interviews/:id/feedback', authMiddleware, aiLimiter, async (req, res)
   }
 });
 
+// VOICE — one sentence of the interviewer's speech as audio, when a speech service is set up
+
+app.post('/interviews/:id/voice', authMiddleware, voiceLimiter, async (req, res) => {
+  try {
+    const interviewId = toInterviewId(req.params.id);
+    if (Number.isNaN(interviewId)) throw new AppError(404, 'NOT_FOUND', 'Interview not found');
+    const { audio, type } = await speak(interviewId, req.userId, req.body.text);
+    res.set('Content-Type', type).set('Cache-Control', 'no-store').send(audio);
+  } catch (error) {
+    sendError(res, error, 'Error generating speech');
+  }
+});
+
 // PRODUCT FEEDBACK — saved, and emailed to the support address when email is configured
 
 app.post('/feedback', authMiddleware, feedbackLimiter, async (req, res) => {
@@ -676,5 +693,6 @@ const PORT = process.env.PORT || 5001;
 httpServer.listen(PORT, () => {
     console.log(`Server Running on port ${PORT} (HTTP + WebSocket)`);
     console.log(`AI provider: ${describeProvider()}`);
+    console.log(`Interviewer's voice: ${describeVoice()}`);
     if (!mailConfigured) console.warn('SMTP_USER / SMTP_PASS are not set: user feedback is saved but not emailed.');
 });

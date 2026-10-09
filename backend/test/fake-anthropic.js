@@ -49,11 +49,23 @@ function replyFor(body, count) {
  * @param {number} [options.pieceDelayMs] wait between streamed pieces
  */
 function createFakeAnthropic({ delayMs = 0, pieceDelayMs = 0 } = {}) {
-  const state = { calls: [], count: 0 };
+  const state = { calls: [], count: 0, spoken: [] };
   const usage = { input_tokens: 100, cache_read_input_tokens: 900, cache_creation_input_tokens: 50, output_tokens: 40 };
 
   const server = http.createServer((req, res) => {
     if (req.method === 'GET') { res.end(String(state.count)); return; }
+    // Also stands in for a speech service: any request for speech gets a third of a second of silence
+    if (req.url.includes('/cognitiveservices/') || req.url.includes('/audio/speech')) {
+      let ssml = ''; req.on('data', (c) => ssml += c); req.on('end', () => {
+        state.spoken.push(ssml);
+        if (ssml.includes('VOICE_FAIL_PLEASE')) { res.statusCode = 500; return res.end('no voice today'); }
+        const samples = 8000; const wav = Buffer.alloc(44 + samples * 2);
+        wav.write('RIFF', 0); wav.writeUInt32LE(36 + samples * 2, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+        wav.writeUInt32LE(24000, 24); wav.writeUInt32LE(48000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(samples * 2, 40);
+        res.setHeader('content-type', 'audio/wav'); res.end(wav);
+      });
+      return;
+    }
     let raw = ''; req.on('data', (c) => raw += c); req.on('end', async () => {
       const body = JSON.parse(raw);
       state.count++; state.calls.push(body);

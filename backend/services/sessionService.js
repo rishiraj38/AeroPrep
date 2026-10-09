@@ -6,6 +6,7 @@ const { AppError } = require('./appError');
 const { stripControl, cleanCandidateText } = require('./text');
 const { extractTextFromPdf } = require('./pdfService');
 const { speakingStats } = require('./speakingStats');
+const { voiceEnabled } = require('./voiceService');
 const {
   interviewGreeting,
   interviewTurnNote,
@@ -115,6 +116,8 @@ function buildState(interview) {
     answersUsed: countAnswers(interview),
     maxAnswers: MAX_ANSWERS,
     maxAnswerChars: MAX_ANSWER_CHARS,
+    // Whether the server can supply the interviewer's voice (otherwise the browser's is used)
+    naturalVoice: voiceEnabled,
     hasFeedback: !!interview.feedback
   };
 }

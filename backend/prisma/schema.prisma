@@ -41,6 +41,8 @@ model Interview {
   // Model calls that failed after they may have been paid for. At the cap in limits.js the
   // interview makes no more calls, so a failure cannot be repeated without end
   failedCalls     Int              @default(0)
+  // Characters of the interviewer's speech turned into audio by the speech service
+  voiceChars      Int              @default(0)
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
   messages        Message[]
