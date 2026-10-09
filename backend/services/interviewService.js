@@ -87,8 +87,13 @@ async function loadSession(interviewId, userId) {
   return interview;
 }
 
-async function appendMessage(interviewId, speaker, text) {
-  return prisma.message.create({ data: { interviewId, speaker, text } });
+async function appendMessage(interviewId, speaker, text, timings = {}) {
+  return prisma.message.create({ data: { interviewId, speaker, text, ...timings } });
+}
+
+// The transcript with the answers' timings, for the "how you spoke" figures
+async function listMessages(interviewId) {
+  return prisma.message.findMany({ where: { interviewId }, orderBy: { id: 'asc' } });
 }
 
 async function deleteMessage(messageId) {
@@ -342,6 +347,7 @@ async function getInterviewById(interviewId, userId) {
 module.exports = {
   toInterviewId,
   listQuestions,
+  listMessages,
   saveAppFeedback,
   getQuota,
   assertCanStartInterview,

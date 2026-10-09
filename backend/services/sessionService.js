@@ -5,6 +5,7 @@
 const { AppError } = require('./appError');
 const { stripControl, cleanCandidateText } = require('./text');
 const { extractTextFromPdf } = require('./pdfService');
+const { speakingStats } = require('./speakingStats');
 const {
   interviewGreeting,
   interviewTurnNote,
@@ -29,7 +30,8 @@ const {
   saveUnevaluatedCode,
   markCodingSkipped,
   saveFeedback,
-  listQuestions
+  listQuestions,
+  listMessages
 } = require('./interviewService');
 const {
   INTERVIEW_MINUTES,
@@ -161,7 +163,18 @@ async function joinInterview(interviewId, userId) {
 /**
  * Record the candidate's answer and generate the interviewer's reply: exactly one model call.
  */
-async function submitAnswer(interviewId, userId, rawText, onReplyChunk) {
+// Timings measured by the browser. They only feed the candidate's own speaking figures, so
+// they are tidied rather than trusted: whole milliseconds, never more than the interview lasts.
+function cleanTimings(raw) {
+  const ms = (value) => (Number.isFinite(value) && value >= 0 ? Math.min(Math.round(value), DURATION_MS) : null);
+  return {
+    thinkMs: ms(raw?.thinkMs),
+    spokenMs: ms(raw?.spokenMs),
+    typed: typeof raw?.typed === 'boolean' ? raw.typed : null
+  };
+}
+
+async function submitAnswer(interviewId, userId, rawText, onReplyChunk, rawTimings) {
   // Keyed by user as well, so that someone guessing another person's interview number
   // cannot make that person's own answer bounce as "busy"
   const key = `${userId}:${toInterviewId(interviewId)}`;
@@ -203,7 +216,7 @@ async function submitAnswer(interviewId, userId, rawText, onReplyChunk) {
       let answer;
       try {
         resumeText = await ensureResumeText(interview);
-        answer = await appendMessage(interview.id, 'user', text);
+        answer = await appendMessage(interview.id, 'user', text, cleanTimings(rawTimings));
       } catch (error) {
         // Nothing was stored and nothing was spent, so the interview is not used up either
         await giveBack().catch(() => {});
@@ -414,9 +427,11 @@ const TOO_SHORT_FEEDBACK = {
  * round, then served from the database, so the scores cannot be set by the client and
  * reloading the page never pays for a second analysis.
  */
-// The report plus the interview's questions, each with the note written about its answer
+// The report plus the interview's questions, each with the note written about its answer,
+// and the figures on how the candidate spoke
 async function withQuestions(feedback) {
-  return { feedback, questions: await listQuestions(feedback.interviewId) };
+  const [questions, messages] = await Promise.all([listQuestions(feedback.interviewId), listMessages(feedback.interviewId)]);
+  return { feedback, questions, speaking: speakingStats(messages) };
 }
 
 async function getOrCreateFeedback(interviewId, userId) {

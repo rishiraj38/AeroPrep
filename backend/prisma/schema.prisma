@@ -69,6 +69,11 @@ model Message {
   interview   Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
   speaker     String // "ai" | "user"
   text        String
+  // For answers, as measured in the browser: how long the candidate took to begin, how long
+  // they spoke for, and whether they typed instead. Only used for the "how you spoke" figures.
+  thinkMs     Int?
+  spokenMs    Int?
+  typed       Boolean?
   createdAt   DateTime  @default(now())
 
   @@index([interviewId])

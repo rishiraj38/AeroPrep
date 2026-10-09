@@ -191,7 +191,7 @@ const newInterview = async (token, extra = {}) => (await api('POST', '/interview
 
     const chunks = [];
     sock.on('interview:reply-chunk', (chunk) => chunks.push({ ...chunk, at: Date.now() }));
-    r = await emit(sock, 'interview:answer', { interviewId: idA, text: 'Doing great, thanks!' });
+    r = await emit(sock, 'interview:answer', { interviewId: idA, text: 'Doing great, thanks!', timings: { thinkMs: 1500.4, spokenMs: 6000, typed: false } });
     const ackAt = Date.now();
     check('reply is streamed sentence by sentence before the full state', chunks.length === 2 && chunks[0].text === 'Interesting.' && chunks[1].text === 'Question after call 1?' && chunks.every((c) => c.interviewId === idA && c.at <= ackAt), JSON.stringify(chunks));
     check('stored reply is exactly the streamed sentences', r.state.transcript[2].text === chunks.map((c) => c.text).join(' '));
@@ -231,7 +231,7 @@ const newInterview = async (token, extra = {}) => (await api('POST', '/interview
     check('second turn replays stored history', llm.calls[1].messages.map((m) => m.role[0]).join('') === 'uauau' && typeof llm.calls[1].messages[2].content === 'string');
     sock2.disconnect();
 
-    r = await emit(sock, 'interview:answer', { interviewId: idA, text: 'x'.repeat(9000) });
+    r = await emit(sock, 'interview:answer', { interviewId: idA, text: 'x'.repeat(9000), timings: { thinkMs: -5, spokenMs: 'soon', typed: 'yes' } });
     check('over-long answer is cut to the cap', r.state.transcript[5].text.length === 4000);
     check('nearly-over note sent', llm.calls[2].messages.at(-1).content[1].text.includes('almost over'));
     r = await emit(sock, 'interview:answer', { interviewId: idA, text: 'Last answer.' });
@@ -270,6 +270,10 @@ const newInterview = async (token, extra = {}) => (await api('POST', '/interview
     check('feedback generated with integer scores', f.status === 200 && f.json.feedback.totalScore === 72 && f.json.feedback.interviewScore === 80 && f.json.feedback.codingScore === 52 && f.json.feedback.recommendation === 'Hire', JSON.stringify(f.json));
     check('feedback prompt used the stored transcript and code', JSON.stringify(llm.calls.at(-1)).includes('Doing great, thanks!') && JSON.stringify(llm.calls.at(-1)).includes('return correct'));
     check('each answer gets its note, matched by exchange number', f.json.questions.length === 4 && f.json.questions[0].feedback === null && f.json.questions[1].feedback === 'Good detail on the queue; say how retries were bounded.' && f.json.questions[2].feedback === 'Too brief.' && f.json.questions[3].feedback === null, JSON.stringify(f.json.questions));
+    const timed = await prisma.message.findMany({ where: { interviewId: idA, speaker: 'user' }, orderBy: { id: 'asc' } });
+    check('answer timings are stored, and nonsense ones are dropped', timed[0].thinkMs === 1500 && timed[0].spokenMs === 6000 && timed[0].typed === false && timed[2].thinkMs === null && timed[2].spokenMs === null && timed[2].typed === null, JSON.stringify(timed.map((m) => [m.thinkMs, m.spokenMs, m.typed])));
+    check('the report says how the candidate spoke, without a model call', f.json.speaking.answers === 4 && f.json.speaking.words > 5 && f.json.speaking.averageSecondsToStart === 1.5 && f.json.speaking.wordsPerMinute === null && Array.isArray(f.json.speaking.topFillers), JSON.stringify(f.json.speaking));
+    check('the interviewer is told an acknowledgement was already spoken', llm.calls[0].system[0].text.includes('do not open your reply with an acknowledgement'));
     f = await api('POST', `/interviews/${idA}/feedback`, token);
     check('reloading feedback is free', f.json.feedback.totalScore === 72 && f.json.questions.length === 4 && llm.count === callsBefore + 1);
     check('coding is closed once feedback exists', (await api('POST', `/interviews/${idA}/coding/run`, token, { code: 'x', language: 'python' })).status === 409);

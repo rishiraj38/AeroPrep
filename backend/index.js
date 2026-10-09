@@ -651,7 +651,7 @@ io.on('connection', (socket) => {
       const interviewId = toInterviewId(payload?.interviewId);
       const state = await submitAnswer(interviewId, socket.userId, payload?.text, (text) => {
         socket.emit('interview:reply-chunk', { interviewId, text });
-      });
+      }, payload?.timings);
       if (state.status === 'ended') metrics.interviews.finished++;
       return state;
     });

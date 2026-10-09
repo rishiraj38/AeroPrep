@@ -64,11 +64,12 @@ backend/
     pdfWorker.js           the actual PDF parsing, in a worker thread
     limits.js              every cap, in one place
     text.js                strips characters the database cannot store
+    speakingStats.js       pace, filler words and timing figures for the report
     mailService.js         feedback email
     appError.js            an error that is safe to show the user
   prisma/schema.prisma     the data model
   prisma/migrations/       one folder per schema change
-  test/e2e.js              133 end-to-end checks
+  test/e2e.js              136 end-to-end checks
   test/fake-anthropic.js   a stand-in for the model, for tests
 
 frontend/
@@ -94,7 +95,7 @@ frontend/
 |---|---|
 | `User` | name, email, hashed password, `interviewLimit` (optional override of the free 3) |
 | `Interview` | owner, `resumeText`, `jobDescription`, `level`, `startedAt`, `endedAt`, token totals, `failedCalls` |
-| `Message` | the transcript: one row per thing said, `speaker` is `ai` or `user` |
+| `Message` | the transcript: one row per thing said, `speaker` is `ai` or `user`; answers also carry how long the candidate took to start, how long they spoke, and whether they typed |
 | `Question` | question and answer pairs rebuilt from the transcript when the interview ends, plus the report's note on each |
 | `CodingChallenge` | the generated problem, the candidate's code, the last review, how many checks were used |
 | `Feedback` | the report: three scores, strengths, weaknesses, write-up, recommendation |
@@ -140,6 +141,8 @@ Offered only if at least one real interview question was answered. `POST /interv
 
 ### 5.8 Report
 `POST /interviews/:id/feedback` generates the report once from the stored transcript and coding round, saves it, and from then on reads it back from the database.
+
+Alongside it comes **"How you spoke"**: pace in words per minute, filler words, average time to start answering and the longest answer. These are counted by `speakingStats.js` from the transcript and the timings the browser sent with each answer. No model call is involved, so it costs nothing.
 
 ---
 
@@ -243,6 +246,7 @@ Render sits behind Cloudflare, so the visitor is identified by the `CF-Connectin
 `frontend/app/(root)/interview/session/page.tsx` is the largest file. Its parts:
 
 - **State from the server.** Every socket acknowledgement carries the full interview state, and the page redraws from it. On every connect and reconnect it sends `interview:join`.
+- **No dead air.** The moment an answer is sent, the page says a short "Okay." or "Right." in Alex's voice while the real reply is being written. The system prompt tells the model this has happened, so it does not open with a second acknowledgement.
 - **Speaking.** A "turn" is a queue of sentences. Each is one `SpeechSynthesisUtterance`, spoken slightly slower than the browser default, with questions lifted in pitch. Watchdogs handle a browser that never starts or stalls mid-sentence, by falling back to text.
 - **Listening.** Speech recognition fills the answer box. After a pause of the chosen length (3, 5 or 8 seconds, or never) the answer sends itself, with a countdown and a "Not yet" button. The microphone is closed while Alex speaks.
 - **Typing.** The first keystroke stops the microphone for that answer, so nothing is entered twice. A typed answer is never sent automatically.
@@ -253,7 +257,7 @@ Render sits behind Cloudflare, so the visitor is identified by the `CF-Connectin
 
 ## 10. Testing
 
-**Backend, in the repo** (`npm test` in `backend/`): starts the real server against a throwaway PostgreSQL and a stand-in model, and drives it over HTTP and sockets. 133 checks covering access control, the whole interview flow, refresh and reconnect, limits and races, every failure mode of the model, hostile PDFs and rate limits. It runs in GitHub Actions on every push.
+**Backend, in the repo** (`npm test` in `backend/`): starts the real server against a throwaway PostgreSQL and a stand-in model, and drives it over HTTP and sockets. 136 checks covering access control, the whole interview flow, refresh and reconnect, limits and races, every failure mode of the model, hostile PDFs and rate limits. It runs in GitHub Actions on every push.
 
 ```bash
 cd backend
