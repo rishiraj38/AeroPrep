@@ -22,9 +22,9 @@ const REGION = process.env.VOICE_REGION || 'eastus';
 // Defaults per service: a male, conversational voice, and the quickest model
 const DEFAULTS = {
   azure: { name: 'en-US-AndrewNeural' },
-  // "Eric": a conversational voice, on the model that answers in under half a second.
+  // "Chris": a down-to-earth conversational voice, on the model that answers in under half a second.
   // VOICE_MODEL=eleven_multilingual_v2 is more expressive, slower, and uses twice the credits.
-  elevenlabs: { name: 'cjVigY5qzO86Huf0OWal', model: 'eleven_flash_v2_5' },
+  elevenlabs: { name: 'iP95p4xoKVk53GoZ742B', model: 'eleven_flash_v2_5' },
   openai: { name: 'onyx', model: 'gpt-4o-mini-tts' }
 };
 const NAME = process.env.VOICE_NAME || DEFAULTS[PROVIDER]?.name;
