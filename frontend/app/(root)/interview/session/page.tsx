@@ -293,6 +293,7 @@ export default function InterviewSessionPage() {
     stopListening();
     synthRef.current?.cancel();
     neuralRef.current?.cancel();
+    neuralRef.current?.retry();
     turnRef.current = { utterances: [], pending: 0, closed: false, silenced: !synthRef.current && !neuralRef.current?.available, onDone };
     speakingRef.current = true;
     setIsAiSpeaking(true);

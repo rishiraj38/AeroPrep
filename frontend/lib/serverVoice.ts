@@ -6,7 +6,9 @@ import { getToken } from './auth';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
 // After this a sentence is skipped rather than waited for
-const SENTENCE_TIMEOUT_MS = 8000;
+const SENTENCE_TIMEOUT_MS = 12000;
+// One failed sentence should not cost the whole interview its voice; this many in a row does
+const MAX_FAILURES = 4;
 
 export class ServerVoice {
   /** True while the API is supplying the voice */
@@ -18,6 +20,8 @@ export class ServerVoice {
   private tail: Promise<void> = Promise.resolve();    // sentences play one after another
   private cache = new Map<string, AudioBuffer>();     // short lines said often, ready at once
   private lastText = '';                              // the sentence before, sent along so the tone carries over
+  private started = false;
+  private failures = 0;                               // in a row
 
   /** Call from a click (browsers only start audio after one). `warmUp` lines are fetched ahead. */
   start(interviewId: number, warmUp: string[] = []) {
@@ -25,8 +29,20 @@ export class ServerVoice {
     this.interviewId = interviewId;
     this.context = this.context || new AudioContext();
     this.context.resume().catch(() => {});
+    this.started = true;
     this.available = true;
-    for (const line of warmUp) this.fetchAudio(line).then(buffer => { if (buffer) this.cache.set(line, buffer); });
+    // The short lines are fetched one at a time, after the greeting has had its turn
+    setTimeout(async () => {
+      for (const line of warmUp) {
+        const buffer = await this.fetchAudio(line, '', true);
+        if (buffer) this.cache.set(line, buffer);
+      }
+    }, 4000);
+  }
+
+  /** A new reply is starting: give the voice another go if it only stumbled earlier. */
+  retry() {
+    if (this.started && this.context && this.failures < MAX_FAILURES) this.available = true;
   }
 
   /** Say one sentence after anything already queued. Resolves true once it has been heard. */
@@ -61,8 +77,13 @@ export class ServerVoice {
     this.context = null;
   }
 
-  private async fetchAudio(text: string, previous = ''): Promise<AudioBuffer | null> {
-    if (!this.available || !this.context) return null;
+  private async fetchAudio(text: string, previous = '', quiet = false): Promise<AudioBuffer | null> {
+    if (!this.started || !this.context || (!this.available && !quiet)) return null;
+    // `quiet` requests (the ready-made short lines) never switch the voice off when they fail
+    const failed = () => {
+      if (!quiet) { this.failures++; this.available = false; }
+      return null;
+    };
     try {
       const response = await fetch(`${API_BASE_URL}/interviews/${this.interviewId}/voice`, {
         method: 'POST',
@@ -70,15 +91,13 @@ export class ServerVoice {
         body: JSON.stringify({ text, previous }),
         signal: AbortSignal.timeout(SENTENCE_TIMEOUT_MS),
       });
-      if (!response.ok) {
-        // Switched off, over its limit or broken: use the built-in voice from here on
-        this.available = false;
-        return null;
-      }
-      return await this.context.decodeAudioData(await response.arrayBuffer());
+      // Switched off, over its limit or broken: the built-in voice takes over for this reply
+      if (!response.ok) return failed();
+      const buffer = await this.context.decodeAudioData(await response.arrayBuffer());
+      if (!quiet) this.failures = 0;
+      return buffer;
     } catch {
-      this.available = false;
-      return null;
+      return failed();
     }
   }
 

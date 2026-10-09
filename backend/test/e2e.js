@@ -494,6 +494,9 @@ const newInterview = async (token, extra = {}) => (await api('POST', '/interview
     check('the text reaches the speech service safely wrapped, with the key', llm.spoken.at(-1).includes('Tell me about &lt;b&gt;Go&lt;/b&gt; &amp; &quot;queues&quot;.') && llm.spoken.at(-1).includes('<voice name="en-US-AndrewNeural">'), llm.spoken.at(-1));
     check('what was spoken is counted on the interview', (await row(idO)).voiceChars === 'Tell me about <b>Go</b> & "queues".'.length);
     check('it needs a login, and the caller\'s own interview', (await voice(null, idO, 'hi')).status === 401 && (await voice(token4, idO, 'hi')).status === 404 && (await voice(token5, 'abc', 'hi')).status === 404);
+    const before429 = llm.voiceRequests.length;
+    const flood = await Promise.all(Array.from({ length: 8 }, (_, i) => voice(token5, idO, `S${i}.`)));
+    check('eight sentences asked for at once all come back, never more than two at the service at a time', flood.every((x) => x.status === 200) && llm.voiceMostAtOnce <= 2 && llm.voiceRequests.length === before429 + 8, `${flood.map((x) => x.status).join(',')} most at once ${llm.voiceMostAtOnce}`);
     check('nothing to say is refused', (await voice(token5, idO, '   ')).status === 400);
     v = await voice(token5, idO, 'VOICE_FAIL_PLEASE');
     check('a speech service that fails is reported, not passed on', v.status === 502);

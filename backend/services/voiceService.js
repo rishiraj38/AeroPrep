@@ -36,6 +36,23 @@ const MAX_SENTENCE_CHARS = 600;       // one spoken sentence; the interviewer's 
 const MAX_INTERVIEW_CHARS = 12000;    // several times what a full interview says
 const TIMEOUT_MS = 10000;
 
+// Speech services refuse requests that arrive too many at once (ElevenLabs' free plan allows
+// only a few), and a reply's sentences all arrive together. So they wait their turn here.
+const MAX_AT_ONCE = Number(process.env.VOICE_CONCURRENCY) > 0 ? Number(process.env.VOICE_CONCURRENCY) : 2;
+let running = 0;
+const waiting = [];
+async function inTurn(task) {
+  if (running >= MAX_AT_ONCE) await new Promise((resolve) => waiting.push(resolve));
+  running++;
+  try {
+    return await task();
+  } finally {
+    running--;
+    const next = waiting.shift();
+    if (next) next();
+  }
+}
+
 const voiceEnabled = !!API_KEY && Object.hasOwn(DEFAULTS, PROVIDER);
 
 // Characters spoken today, kept in memory and seeded from the database after a restart
@@ -120,8 +137,15 @@ async function speak(interviewId, userId, rawText, rawPrevious) {
 
   let response;
   try {
-    const signal = AbortSignal.timeout(TIMEOUT_MS);
-    response = await SERVICES[PROVIDER](text, signal, previous);
+    response = await inTurn(async () => {
+      let answer = await SERVICES[PROVIDER](text, AbortSignal.timeout(TIMEOUT_MS), previous);
+      // "Too many at once" from the service: wait a moment and ask once more
+      if (answer.status === 429) {
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        answer = await SERVICES[PROVIDER](text, AbortSignal.timeout(TIMEOUT_MS), previous);
+      }
+      return answer;
+    });
   } catch (error) {
     console.error(`[Voice] ${PROVIDER} could not be reached: ${error.message}`);
     throw new AppError(502, 'VOICE_UNAVAILABLE', 'The natural voice is not available right now.');
