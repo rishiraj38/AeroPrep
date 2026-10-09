@@ -247,6 +247,7 @@ Render sits behind Cloudflare, so the visitor is identified by the `CF-Connectin
 
 - **State from the server.** Every socket acknowledgement carries the full interview state, and the page redraws from it. On every connect and reconnect it sends `interview:join`.
 - **No dead air.** The moment an answer is sent, the page says a short "Okay." or "Right." in Alex's voice while the real reply is being written. The system prompt tells the model this has happened, so it does not open with a second acknowledgement.
+- **Natural voice (optional).** Offered in the lobby on browsers with WebGPU. `lib/neuralVoice.ts` starts `public/voice-worker.js`, which runs the Kokoro speech model in the browser (a one-time download of about 330 MB, then cached) and returns audio for each sentence; the page plays the sentences in order. The choice is remembered. Everyone else hears the browser's built-in voice.
 - **Speaking.** A "turn" is a queue of sentences. Each is one `SpeechSynthesisUtterance`, spoken slightly slower than the browser default, with questions lifted in pitch. Watchdogs handle a browser that never starts or stalls mid-sentence, by falling back to text.
 - **Listening.** Speech recognition fills the answer box. After a pause of the chosen length (3, 5 or 8 seconds, or never) the answer sends itself, with a countdown and a "Not yet" button. The microphone is closed while Alex speaks.
 - **Typing.** The first keystroke stops the microphone for that answer, so nothing is entered twice. A typed answer is never sent automatically.

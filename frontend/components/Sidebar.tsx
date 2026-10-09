@@ -70,7 +70,7 @@ export const Sidebar = ({ user, isSnowing, toggleSnow }: SidebarProps) => {
   return (
     <div 
       className={cn(
-        "hidden md:flex flex-col h-screen bg-[#0a0a0f] border-r border-white/5 sticky top-0 left-0 z-40 transition-all duration-300 ease-in-out relative group",
+        "hidden md:flex flex-col h-screen shrink-0 self-start bg-[#0a0a0f] border-r border-white/5 sticky top-0 z-40 transition-all duration-300 ease-in-out group",
         isCollapsed ? "w-20" : "w-72"
       )}
     >
