@@ -61,6 +61,13 @@ function delivery(text: string, position: number): { rate: number; pitch: number
   return { rate: 0.93, pitch: STATEMENT_PITCHES[position % STATEMENT_PITCHES.length] };
 }
 
+// Said the instant an answer is sent, so there is no dead air while the real reply is written.
+// (The interviewer is told this has been said and does not open with another one.)
+const ACKNOWLEDGEMENTS = ['Okay.', 'Right.', 'Mm-hm.', 'I see.', 'Alright.'];
+function acknowledgementFor(answer: string, turnNumber: number): string {
+  return /\?\s*$/.test(answer) ? 'Sure.' : ACKNOWLEDGEMENTS[turnNumber % ACKNOWLEDGEMENTS.length];
+}
+
 function pickVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null {
   const english = voices.filter(v => v.lang.replace('_', '-').startsWith('en'));
   for (const preference of VOICE_PREFERENCES) {
@@ -144,6 +151,12 @@ export default function InterviewSessionPage() {
   const [confirmEnd, setConfirmEnd] = useState(false);     // "end the interview?" is being asked
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const typedRef    = useRef(false);                       // the candidate is answering by keyboard
+  // When it became the candidate's turn, and when they first and last said or typed something:
+  // sent with the answer, for the "how you spoke" figures in the report
+  const turnStartRef  = useRef(0);
+  const firstInputRef = useRef(0);
+  const lastInputRef  = useRef(0);
+  const ackRef        = useRef<SpeechSynthesisUtterance | null>(null);
   const cameraPendingRef = useRef(false);                  // a camera request is waiting on the browser
   const [endError, setEndError] = useState('');            // the server could not be told the interview is over
   const [micPausedToType, setMicPausedToType] = useState(false);
@@ -253,6 +266,9 @@ export default function InterviewSessionPage() {
     speakingRef.current = false;
     setIsAiSpeaking(false);
     lastActivityRef.current = Date.now();
+    turnStartRef.current = Date.now();
+    firstInputRef.current = 0;
+    lastInputRef.current = 0;
     turn.onDone();
   }, []);
 
@@ -485,7 +501,26 @@ export default function InterviewSessionPage() {
     pendingAnswerRef.current = { text: ans, answersBefore: answersUsedRef.current };
     setThinking(true);
 
-    sock.emit('interview:answer', { interviewId: interviewIdRef.current, text: ans }, (res: Ack) => {
+    // How long the candidate took to begin and how long they spoke, when this tab saw the whole turn
+    const timings = turnStartRef.current && firstInputRef.current
+      ? { thinkMs: firstInputRef.current - turnStartRef.current, spokenMs: lastInputRef.current - firstInputRef.current, typed: typedRef.current }
+      : undefined;
+    turnStartRef.current = 0;
+
+    // A short spoken acknowledgement straight away; the reply's first sentence follows it
+    const synth = synthRef.current;
+    if (synth) {
+      const ack = new SpeechSynthesisUtterance(acknowledgementFor(ans, answersUsedRef.current));
+      const voice = voiceRef.current || pickVoice(synth.getVoices());
+      if (voice) { ack.voice = voice; ack.lang = voice.lang; }
+      ack.rate = 0.9;
+      ack.pitch = 0.98;
+      ackRef.current = ack;   // kept, or some browsers drop it before it is spoken
+      synth.cancel();
+      synth.speak(ack);
+    }
+
+    sock.emit('interview:answer', { interviewId: interviewIdRef.current, text: ans, timings }, (res: Ack) => {
       pendingAnswerRef.current = null;
       setThinking(false);
       if (res.ok && res.state) { applyState(res.state); return; }
@@ -561,6 +596,8 @@ export default function InterviewSessionPage() {
         if (!combined) return;
         typedRef.current = false;
         lastActivityRef.current = Date.now();
+        if (!firstInputRef.current) firstInputRef.current = Date.now();
+        lastInputRef.current = Date.now();
         setAnswer(combined);
 
         // Every new word pushes the auto-send back; a pause of the chosen length sends what is
@@ -1086,6 +1123,8 @@ export default function InterviewSessionPage() {
                   setAnswer(e.target.value);
                   sttFinalRef.current = e.target.value ? e.target.value + ' ' : '';
                   lastActivityRef.current = Date.now();
+                  if (!firstInputRef.current) firstInputRef.current = Date.now();
+                  lastInputRef.current = Date.now();
                   cancelAutoSend();
                   // Auto-grow: reset height, then set to scrollHeight
                   e.target.style.height = 'auto';

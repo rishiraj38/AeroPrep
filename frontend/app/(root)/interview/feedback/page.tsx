@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, useCallback } from 'react';
-import { getFeedback, ApiError, InterviewFeedback, AnsweredQuestion } from '@/lib/api';
+import { getFeedback, ApiError, InterviewFeedback, AnsweredQuestion, SpeakingStats } from '@/lib/api';
 import { isAuthenticated } from '@/lib/auth';
 import { getCurrentInterviewId, clearCurrentInterview } from '@/lib/currentInterview';
 import { Button } from '@/components/ui/button';
@@ -14,6 +14,7 @@ export default function FeedbackPage() {
   const router = useRouter();
   const [feedback, setFeedback] = useState<InterviewFeedback | null>(null);
   const [questions, setQuestions] = useState<AnsweredQuestion[]>([]);
+  const [speaking, setSpeaking] = useState<SpeakingStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [inProgress, setInProgress] = useState(false);
@@ -30,6 +31,7 @@ export default function FeedbackPage() {
       const report = await getFeedback(interviewId);
       setFeedback(report.feedback);
       setQuestions(report.questions.filter(question => question.feedback));
+      setSpeaking(report.speaking && report.speaking.words >= 20 ? report.speaking : null);
     } catch (err: any) {
       console.error("Failed to load feedback", err);
       setInProgress(err instanceof ApiError && err.code === 'INTERVIEW_IN_PROGRESS');
@@ -204,6 +206,50 @@ export default function FeedbackPage() {
                </ul>
            </div>
         </div>
+
+        {/* How you spoke: counted, not judged by the AI */}
+        {speaking && (
+          <div className="card p-8">
+            <h3 className="font-bold text-white mb-1 flex items-center gap-2">
+              <Target className="h-5 w-5 text-primary-200" />
+              How you spoke
+            </h3>
+            <p className="text-sm text-light-400 mb-6">Counted from your answers, not judged by the AI.</p>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="bg-dark-200 border border-white/5 rounded-lg p-4">
+                <p className="text-xs text-light-400">Pace</p>
+                <p className="text-2xl font-bold text-white">{speaking.wordsPerMinute ?? '–'}<span className="text-sm font-normal text-light-400"> words/min</span></p>
+                <p className="text-xs text-light-400 mt-1">
+                  {speaking.wordsPerMinute === null ? 'Measured only for spoken answers.'
+                    : speaking.wordsPerMinute > 170 ? 'Fast. Slow down so each point lands.'
+                    : speaking.wordsPerMinute < 110 ? 'Unhurried. A little more pace shows confidence.'
+                    : 'A comfortable interview pace.'}
+                </p>
+              </div>
+              <div className="bg-dark-200 border border-white/5 rounded-lg p-4">
+                <p className="text-xs text-light-400">Filler words</p>
+                <p className="text-2xl font-bold text-white">{speaking.fillerCount}<span className="text-sm font-normal text-light-400"> ({speaking.fillersPer100Words} per 100 words)</span></p>
+                <p className="text-xs text-light-400 mt-1">
+                  {speaking.topFillers.length ? `Most used: ${speaking.topFillers.map(f => `"${f.phrase}" ×${f.count}`).join(', ')}.` : 'None noticed.'}
+                </p>
+              </div>
+              <div className="bg-dark-200 border border-white/5 rounded-lg p-4">
+                <p className="text-xs text-light-400">Time to start answering</p>
+                <p className="text-2xl font-bold text-white">{speaking.averageSecondsToStart ?? '–'}<span className="text-sm font-normal text-light-400"> seconds</span></p>
+                <p className="text-xs text-light-400 mt-1">On average. A short pause to think is fine.</p>
+              </div>
+              <div className="bg-dark-200 border border-white/5 rounded-lg p-4">
+                <p className="text-xs text-light-400">Longest answer</p>
+                <p className="text-2xl font-bold text-white">{speaking.longestAnswer?.words ?? '–'}<span className="text-sm font-normal text-light-400"> words</span></p>
+                <p className="text-xs text-light-400 mt-1">
+                  {speaking.longestAnswer?.seconds ? `About ${speaking.longestAnswer.seconds} seconds. ` : ''}
+                  {(speaking.longestAnswer?.words ?? 0) > 220 ? 'Long: aim for under two minutes.' : 'A reasonable length.'}
+                </p>
+              </div>
+            </div>
+            <p className="text-xs text-light-400 mt-4">Speech recognition drops some “um”s, so the filler count is a minimum.</p>
+          </div>
+        )}
 
         {/* Question by question */}
         {questions.length > 0 && (

@@ -49,6 +49,18 @@ export interface AnsweredQuestion {
   feedback: string | null;
 }
 
+// How the candidate spoke, counted from the transcript and the timings of each answer
+export interface SpeakingStats {
+  answers: number;
+  words: number;
+  wordsPerMinute: number | null;       // null when the answers were typed
+  fillerCount: number;
+  fillersPer100Words: number;
+  topFillers: { phrase: string; count: number }[];
+  averageSecondsToStart: number | null;
+  longestAnswer: { answer: number; words: number; seconds: number | null } | null;
+}
+
 export interface InterviewFeedback {
   totalScore: number;
   interviewScore: number;
@@ -203,6 +215,6 @@ export async function sendProductFeedback(rating: number, message: string, inter
 // ============================================
 
 // The interview's report; generated on first call, then read back from the database
-export async function getFeedback(interviewId: number): Promise<{ feedback: InterviewFeedback; questions: AnsweredQuestion[] }> {
+export async function getFeedback(interviewId: number): Promise<{ feedback: InterviewFeedback; questions: AnsweredQuestion[]; speaking: SpeakingStats | null }> {
   return request(`/interviews/${interviewId}/feedback`, { method: 'POST', slow: true });
 }
