@@ -3,10 +3,11 @@
 // browser's built-in voice.
 //
 //   VOICE_API_KEY   key for the speech service (turns this on)
-//   VOICE_PROVIDER  "azure" (default) or "openai" (any service with OpenAI's /audio/speech API)
+//   VOICE_PROVIDER  "elevenlabs", "azure" or "openai" (any service with OpenAI's /audio/speech API).
+//                   Left out, it is ElevenLabs for a key starting "sk_" and Azure otherwise
 //   VOICE_REGION    Azure region, e.g. "centralindia" (azure only)
-//   VOICE_NAME      which voice; defaults to a male conversational one
-//   VOICE_MODEL     model id (openai-style only)
+//   VOICE_NAME      which voice (for ElevenLabs, the voice's id); defaults to a male conversational one
+//   VOICE_MODEL     model id (ElevenLabs and openai-style)
 //   VOICE_BASE_URL  override the service address (openai-style services other than OpenAI)
 //   VOICE_DAILY_CHARS  characters spoken per day across all users before falling back (default 15000,
 //                      which keeps a month inside Azure's free allowance)
@@ -15,11 +16,17 @@ const { prisma } = require('./prismaClient');
 const { AppError } = require('./appError');
 const { stripControl } = require('./text');
 
-const PROVIDER = (process.env.VOICE_PROVIDER || 'azure').toLowerCase();
 const API_KEY = process.env.VOICE_API_KEY || '';
+const PROVIDER = (process.env.VOICE_PROVIDER || (API_KEY.startsWith('sk_') ? 'elevenlabs' : 'azure')).toLowerCase();
 const REGION = process.env.VOICE_REGION || 'eastus';
-const NAME = process.env.VOICE_NAME || (PROVIDER === 'azure' ? 'en-US-AndrewNeural' : 'onyx');
-const MODEL = process.env.VOICE_MODEL || 'gpt-4o-mini-tts';
+// Defaults per service: a male, conversational voice, and the quickest model
+const DEFAULTS = {
+  azure: { name: 'en-US-AndrewNeural' },
+  elevenlabs: { name: 'JBFqnCBsd6RMkjVDRZzb', model: 'eleven_flash_v2_5' }, // "George"
+  openai: { name: 'onyx', model: 'gpt-4o-mini-tts' }
+};
+const NAME = process.env.VOICE_NAME || DEFAULTS[PROVIDER]?.name;
+const MODEL = process.env.VOICE_MODEL || DEFAULTS[PROVIDER]?.model;
 const BASE_URL = (process.env.VOICE_BASE_URL || '').replace(/\/+$/, '');
 const DAILY_CHARS = Number(process.env.VOICE_DAILY_CHARS) > 0 ? Number(process.env.VOICE_DAILY_CHARS) : 15000;
 
@@ -27,7 +34,7 @@ const MAX_SENTENCE_CHARS = 600;       // one spoken sentence; the interviewer's 
 const MAX_INTERVIEW_CHARS = 12000;    // several times what a full interview says
 const TIMEOUT_MS = 10000;
 
-const voiceEnabled = !!API_KEY && (PROVIDER === 'azure' || PROVIDER === 'openai');
+const voiceEnabled = !!API_KEY && Object.hasOwn(DEFAULTS, PROVIDER);
 
 // Characters spoken today, kept in memory and seeded from the database after a restart
 let today = '';
@@ -61,6 +68,17 @@ async function fromAzure(text, signal) {
   });
 }
 
+async function fromElevenLabs(text, signal) {
+  return fetch(`${BASE_URL || 'https://api.elevenlabs.io'}/v1/text-to-speech/${encodeURIComponent(NAME)}?output_format=mp3_44100_64`, {
+    method: 'POST',
+    signal,
+    headers: { 'xi-api-key': API_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, model_id: MODEL })
+  });
+}
+
+const SERVICES = { azure: fromAzure, elevenlabs: fromElevenLabs, openai: (text, signal) => fromOpenAIStyle(text, signal) };
+
 async function fromOpenAIStyle(text, signal) {
   return fetch(`${BASE_URL || 'https://api.openai.com/v1'}/audio/speech`, {
     method: 'POST',
@@ -93,7 +111,7 @@ async function speak(interviewId, userId, rawText) {
   let response;
   try {
     const signal = AbortSignal.timeout(TIMEOUT_MS);
-    response = await (PROVIDER === 'azure' ? fromAzure(text, signal) : fromOpenAIStyle(text, signal));
+    response = await SERVICES[PROVIDER](text, signal);
   } catch (error) {
     console.error(`[Voice] ${PROVIDER} could not be reached: ${error.message}`);
     throw new AppError(502, 'VOICE_UNAVAILABLE', 'The natural voice is not available right now.');

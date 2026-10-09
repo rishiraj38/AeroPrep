@@ -68,7 +68,7 @@ Backend (`backend/.env`):
 | `DAILY_INTERVIEW_LIMIT` | no | Interviews that may start per day across all users. Default 100. A ceiling on spend |
 | `INTERVIEW_MINUTES`, `INTERVIEW_MAX_ANSWERS`, `CODING_MAX_RUNS` | no | Length of an interview (15), answers in it (12), code evaluations (5) |
 | `INTERVIEW_MAX_FAILED_CALLS` | no | Model calls per interview that may fail after possibly being paid for (a timeout, an unusable reply) before the interview stops making calls. Default 6 |
-| `VOICE_API_KEY`, `VOICE_REGION`, `VOICE_NAME` | no | A speech service (Azure by default) for a natural interviewer voice. Without a key the browser's built-in voice is used. `VOICE_DAILY_CHARS` (default 15000) caps daily use |
+| `VOICE_API_KEY`, `VOICE_REGION`, `VOICE_NAME` | no | A speech service (ElevenLabs, Azure or an OpenAI-style service) for a natural interviewer voice. Without a key the browser's built-in voice is used. `VOICE_DAILY_CHARS` (default 15000) caps daily use |
 | `SMTP_USER`, `SMTP_PASS` | no | Gmail address and app password; in-app feedback is emailed to `SUPPORT_EMAIL` |
 | `SUPPORT_EMAIL` | no | Address shown to users and that receives feedback |
 | `CORS_ORIGINS` | no | Sites allowed to call the API besides the built-in ones, comma separated. **Set this if you host the frontend anywhere other than the default address** |

@@ -49,13 +49,14 @@ function replyFor(body, count) {
  * @param {number} [options.pieceDelayMs] wait between streamed pieces
  */
 function createFakeAnthropic({ delayMs = 0, pieceDelayMs = 0 } = {}) {
-  const state = { calls: [], count: 0, spoken: [] };
+  const state = { calls: [], count: 0, spoken: [], voiceRequests: [] };
   const usage = { input_tokens: 100, cache_read_input_tokens: 900, cache_creation_input_tokens: 50, output_tokens: 40 };
 
   const server = http.createServer((req, res) => {
     if (req.method === 'GET') { res.end(String(state.count)); return; }
     // Also stands in for a speech service: any request for speech gets a third of a second of silence
-    if (req.url.includes('/cognitiveservices/') || req.url.includes('/audio/speech')) {
+    if (req.url.includes('/cognitiveservices/') || req.url.includes('/audio/speech') || req.url.includes('/text-to-speech/')) {
+      state.voiceRequests.push({ url: req.url, key: req.headers['xi-api-key'] });
       let ssml = ''; req.on('data', (c) => ssml += c); req.on('end', () => {
         state.spoken.push(ssml);
         if (ssml.includes('VOICE_FAIL_PLEASE')) { res.statusCode = 500; return res.end('no voice today'); }

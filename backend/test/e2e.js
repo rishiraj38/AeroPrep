@@ -533,6 +533,16 @@ const newInterview = async (token, extra = {}) => (await api('POST', '/interview
     const startedToday = await prisma.interview.count({ where: { startedAt: { not: null } } });
     const PORT2 = PORT - 10, API2 = `http://127.0.0.1:${PORT2}`;
     const server2 = spawn(process.execPath, ['index.js'], { cwd: backend, env: { PATH: process.env.PATH, DATABASE_URL, PORT: PORT2, JWT_SECRET: 'test-secret', AI_PROVIDER: 'anthropic', AI_API_KEY: 'sk-ant-test', AI_BASE_URL: fakeUrl, SMTP_USER: '', SMTP_PASS: '', DAILY_INTERVIEW_LIMIT: String(startedToday), TRUST_CLOUDFLARE: 'true' } });
+    // A third server, set up with an ElevenLabs-style key
+    const PORT3 = PORT - 20, API3 = `http://127.0.0.1:${PORT3}`;
+    const server3 = spawn(process.execPath, ['index.js'], { cwd: backend, env: { PATH: process.env.PATH, DATABASE_URL, PORT: PORT3, JWT_SECRET: 'test-secret', AI_PROVIDER: 'anthropic', AI_API_KEY: 'sk-ant-test', AI_BASE_URL: fakeUrl, SMTP_USER: '', SMTP_PASS: '', VOICE_API_KEY: 'sk_eleven_test', VOICE_BASE_URL: fakeUrl } });
+    let log3 = ''; server3.stdout.on('data', (d) => log3 += d); server3.stderr.on('data', (d) => log3 += d);
+    for (let i = 0; i < 50 && !log3.includes('Server Running'); i++) await new Promise((r) => setTimeout(r, 200));
+    try {
+      const eleven = await fetch(`${API3}/interviews/${idA}/voice`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ text: 'Hello there.' }) });
+      const sent = llm.voiceRequests.at(-1);
+      check('a key starting "sk_" selects ElevenLabs, with its voice, model and key header', eleven.status === 200 && sent.url.startsWith('/v1/text-to-speech/JBFqnCBsd6RMkjVDRZzb') && sent.key === 'sk_eleven_test' && llm.spoken.at(-1).includes('"model_id":"eleven_flash_v2_5"') && log3.includes("Interviewer's voice: elevenlabs/"), `${eleven.status} ${JSON.stringify(sent)} ${llm.spoken.at(-1)}`);
+    } finally { server3.kill(); }
     let log2 = ''; server2.stdout.on('data', (d) => log2 += d); server2.stderr.on('data', (d) => log2 += d);
     for (let i = 0; i < 50 && !log2.includes('Server Running'); i++) await new Promise((r) => setTimeout(r, 200));
     try {
