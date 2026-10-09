@@ -518,7 +518,7 @@ app.post('/interviews/:id/voice', authMiddleware, voiceLimiter, async (req, res)
   try {
     const interviewId = toInterviewId(req.params.id);
     if (Number.isNaN(interviewId)) throw new AppError(404, 'NOT_FOUND', 'Interview not found');
-    const { audio, type } = await speak(interviewId, req.userId, req.body.text);
+    const { audio, type } = await speak(interviewId, req.userId, req.body.text, req.body.previous);
     res.set('Content-Type', type).set('Cache-Control', 'no-store').send(audio);
   } catch (error) {
     sendError(res, error, 'Error generating speech');

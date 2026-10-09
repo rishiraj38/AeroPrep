@@ -22,7 +22,9 @@ const REGION = process.env.VOICE_REGION || 'eastus';
 // Defaults per service: a male, conversational voice, and the quickest model
 const DEFAULTS = {
   azure: { name: 'en-US-AndrewNeural' },
-  elevenlabs: { name: 'JBFqnCBsd6RMkjVDRZzb', model: 'eleven_flash_v2_5' }, // "George"
+  // "Eric": a conversational voice, on the model that answers in under half a second.
+  // VOICE_MODEL=eleven_multilingual_v2 is more expressive, slower, and uses twice the credits.
+  elevenlabs: { name: 'cjVigY5qzO86Huf0OWal', model: 'eleven_flash_v2_5' },
   openai: { name: 'onyx', model: 'gpt-4o-mini-tts' }
 };
 const NAME = process.env.VOICE_NAME || DEFAULTS[PROVIDER]?.name;
@@ -68,12 +70,19 @@ async function fromAzure(text, signal) {
   });
 }
 
-async function fromElevenLabs(text, signal) {
+async function fromElevenLabs(text, signal, previous) {
   return fetch(`${BASE_URL || 'https://api.elevenlabs.io'}/v1/text-to-speech/${encodeURIComponent(NAME)}?output_format=mp3_44100_64`, {
     method: 'POST',
     signal,
     headers: { 'xi-api-key': API_KEY, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, model_id: MODEL })
+    body: JSON.stringify({
+      text,
+      model_id: MODEL,
+      // The sentence before this one, so the voice carries its tone across instead of starting cold
+      ...(previous ? { previous_text: previous } : {}),
+      // Lower stability lets the pitch move the way a person's does
+      voice_settings: { stability: 0.45, similarity_boost: 0.8 }
+    })
   });
 }
 
@@ -93,10 +102,11 @@ async function fromOpenAIStyle(text, signal) {
  * only within the caps, so this cannot be used as a free speech service.
  * @returns {Promise<{audio: Buffer, type: string}>}
  */
-async function speak(interviewId, userId, rawText) {
+async function speak(interviewId, userId, rawText, rawPrevious) {
   if (!voiceEnabled) throw new AppError(404, 'VOICE_OFF', 'The natural voice is not set up.');
   const text = stripControl(rawText).replace(/\s+/g, ' ').trim().slice(0, MAX_SENTENCE_CHARS);
   if (!text) throw new AppError(400, 'EMPTY_TEXT', 'Nothing to say.');
+  const previous = stripControl(rawPrevious).replace(/\s+/g, ' ').trim().slice(-300);
 
   const interview = await prisma.interview.findFirst({ where: { id: interviewId, userId }, select: { id: true, voiceChars: true } });
   if (!interview) throw new AppError(404, 'NOT_FOUND', 'Interview not found');
@@ -111,7 +121,7 @@ async function speak(interviewId, userId, rawText) {
   let response;
   try {
     const signal = AbortSignal.timeout(TIMEOUT_MS);
-    response = await SERVICES[PROVIDER](text, signal);
+    response = await SERVICES[PROVIDER](text, signal, previous);
   } catch (error) {
     console.error(`[Voice] ${PROVIDER} could not be reached: ${error.message}`);
     throw new AppError(502, 'VOICE_UNAVAILABLE', 'The natural voice is not available right now.');

@@ -17,6 +17,7 @@ export class ServerVoice {
   private playing: AudioBufferSourceNode | null = null;
   private tail: Promise<void> = Promise.resolve();    // sentences play one after another
   private cache = new Map<string, AudioBuffer>();     // short lines said often, ready at once
+  private lastText = '';                              // the sentence before, sent along so the tone carries over
 
   /** Call from a click (browsers only start audio after one). `warmUp` lines are fetched ahead. */
   start(interviewId: number, warmUp: string[] = []) {
@@ -32,7 +33,8 @@ export class ServerVoice {
   speak(text: string): Promise<boolean> {
     const epoch = this.epoch;
     const cached = this.cache.get(text);
-    const audio = cached ? Promise.resolve<AudioBuffer | null>(cached) : this.fetchAudio(text);
+    const audio = cached ? Promise.resolve<AudioBuffer | null>(cached) : this.fetchAudio(text, this.lastText);
+    this.lastText = text;
     const played = this.tail.then(async () => {
       const buffer = await audio;
       if (!buffer || epoch !== this.epoch || !this.context) return false;
@@ -49,6 +51,7 @@ export class ServerVoice {
     try { this.playing?.stop(); } catch { /* already stopped */ }
     this.playing = null;
     this.tail = Promise.resolve();
+    this.lastText = '';
   }
 
   destroy() {
@@ -58,13 +61,13 @@ export class ServerVoice {
     this.context = null;
   }
 
-  private async fetchAudio(text: string): Promise<AudioBuffer | null> {
+  private async fetchAudio(text: string, previous = ''): Promise<AudioBuffer | null> {
     if (!this.available || !this.context) return null;
     try {
       const response = await fetch(`${API_BASE_URL}/interviews/${this.interviewId}/voice`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken() ?? ''}` },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, previous }),
         signal: AbortSignal.timeout(SENTENCE_TIMEOUT_MS),
       });
       if (!response.ok) {
