@@ -538,13 +538,20 @@ const newInterview = async (token, extra = {}) => (await api('POST', '/interview
     const server2 = spawn(process.execPath, ['index.js'], { cwd: backend, env: { PATH: process.env.PATH, DATABASE_URL, PORT: PORT2, JWT_SECRET: 'test-secret', AI_PROVIDER: 'anthropic', AI_API_KEY: 'sk-ant-test', AI_BASE_URL: fakeUrl, SMTP_USER: '', SMTP_PASS: '', DAILY_INTERVIEW_LIMIT: String(startedToday), TRUST_CLOUDFLARE: 'true' } });
     // A third server, set up with an ElevenLabs-style key
     const PORT3 = PORT - 20, API3 = `http://127.0.0.1:${PORT3}`;
-    const server3 = spawn(process.execPath, ['index.js'], { cwd: backend, env: { PATH: process.env.PATH, DATABASE_URL, PORT: PORT3, JWT_SECRET: 'test-secret', AI_PROVIDER: 'anthropic', AI_API_KEY: 'sk-ant-test', AI_BASE_URL: fakeUrl, SMTP_USER: '', SMTP_PASS: '', VOICE_API_KEY: 'sk_eleven_test', VOICE_BASE_URL: fakeUrl } });
+    const server3 = spawn(process.execPath, ['index.js'], { cwd: backend, env: { PATH: process.env.PATH, DATABASE_URL, PORT: PORT3, JWT_SECRET: 'test-secret', AI_PROVIDER: 'anthropic', AI_API_KEY: 'sk-ant-test', AI_BASE_URL: fakeUrl, SMTP_USER: '', SMTP_PASS: '', VOICE_API_KEY: 'sk_eleven_test', VOICE_BASE_URL: fakeUrl, VOICE2_PROVIDER: 'deepgram', VOICE2_API_KEY: 'dg-test', VOICE2_BASE_URL: fakeUrl } });
     let log3 = ''; server3.stdout.on('data', (d) => log3 += d); server3.stderr.on('data', (d) => log3 += d);
     for (let i = 0; i < 50 && !log3.includes('Server Running'); i++) await new Promise((r) => setTimeout(r, 200));
     try {
       const eleven = await fetch(`${API3}/interviews/${idA}/voice`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ text: 'Hello there.', previous: 'Got it.' }) });
       const sent = llm.voiceRequests.at(-1);
       check('a key starting "sk_" selects ElevenLabs, with its voice, model and key header', eleven.status === 200 && sent.url.startsWith('/v1/text-to-speech/iP95p4xoKVk53GoZ742B') && llm.spoken.at(-1).includes('"previous_text":"Got it."') && sent.key === 'sk_eleven_test' && llm.spoken.at(-1).includes('"model_id":"eleven_flash_v2_5"') && log3.includes("Interviewer's voice: elevenlabs/"), `${eleven.status} ${JSON.stringify(sent)} ${llm.spoken.at(-1)}`);
+      const say = async (text) => (await fetch(`${API3}/interviews/${idA}/voice`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ text }) })).status;
+      const out = await say('ELEVEN_OUT_PLEASE');
+      const tookOver = llm.voiceRequests.at(-1);
+      check('when the first service has run out, the second one speaks the sentence', out === 200 && tookOver.url.startsWith('/v1/speak?model=aura-2-apollo-en') && tookOver.key === 'Token dg-test', `${out} ${JSON.stringify(tookOver)}`);
+      const askedBefore = llm.voiceRequests.length;
+      check('...and the one that ran out is left alone afterwards', (await say('Next sentence.')) === 200 && llm.voiceRequests.length === askedBefore + 1 && llm.voiceRequests.at(-1).url.startsWith('/v1/speak'), JSON.stringify(llm.voiceRequests.slice(askedBefore)));
+      check('the server lists its voices in order', log3.includes('elevenlabs/iP95p4xoKVk53GoZ742B, then deepgram/aura-2-apollo-en'), log3.split('\n').find((l) => l.includes('voice')));
     } finally { server3.kill(); }
     let log2 = ''; server2.stdout.on('data', (d) => log2 += d); server2.stderr.on('data', (d) => log2 += d);
     for (let i = 0; i < 50 && !log2.includes('Server Running'); i++) await new Promise((r) => setTimeout(r, 200));

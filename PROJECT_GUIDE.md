@@ -69,7 +69,7 @@ backend/
     appError.js            an error that is safe to show the user
   prisma/schema.prisma     the data model
   prisma/migrations/       one folder per schema change
-  test/e2e.js              147 end-to-end checks
+  test/e2e.js              151 end-to-end checks
   test/fake-anthropic.js   a stand-in for the model, for tests
 
 frontend/
@@ -258,7 +258,7 @@ Render sits behind Cloudflare, so the visitor is identified by the `CF-Connectin
 
 ## 10. Testing
 
-**Backend, in the repo** (`npm test` in `backend/`): starts the real server against a throwaway PostgreSQL and a stand-in model, and drives it over HTTP and sockets. 147 checks covering access control, the whole interview flow, refresh and reconnect, limits and races, every failure mode of the model, hostile PDFs and rate limits. It runs in GitHub Actions on every push.
+**Backend, in the repo** (`npm test` in `backend/`): starts the real server against a throwaway PostgreSQL and a stand-in model, and drives it over HTTP and sockets. 151 checks covering access control, the whole interview flow, refresh and reconnect, limits and races, every failure mode of the model, hostile PDFs and rate limits. It runs in GitHub Actions on every push.
 
 ```bash
 cd backend
@@ -299,7 +299,7 @@ Backend (`backend/.env`, and the Render dashboard):
 | `AI_MODEL_FAST` | no | quicker model for live turns |
 | `AI_EFFORT` | no | Anthropic only: `low`, `medium`, `high` |
 | `AI_PROVIDER`, `AI_BASE_URL` | no | force a provider or point at a custom endpoint |
-| `VOICE_API_KEY`, `VOICE_REGION`, `VOICE_NAME` | no | speech service for the natural voice (ElevenLabs, Azure or an OpenAI-style service) |
+| `VOICE_API_KEY`, `VOICE_REGION`, `VOICE_NAME` | no | speech service for the natural voice (ElevenLabs, Deepgram, Azure or an OpenAI-style service; up to three, tried in order, with `VOICE2_` and `VOICE3_` settings for the fallbacks) |
 | `SMTP_USER`, `SMTP_PASS` | no | Gmail address and app password for feedback email |
 | `SUPPORT_EMAIL` | no | shown to users, receives feedback |
 | `CORS_ORIGINS` | no | extra sites allowed to call the API |

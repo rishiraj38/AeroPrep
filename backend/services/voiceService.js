@@ -2,39 +2,58 @@
 // natural voice with nothing to download. Optional: without a key the pages fall back to the
 // browser's built-in voice.
 //
-//   VOICE_API_KEY   key for the speech service (turns this on)
-//   VOICE_PROVIDER  "elevenlabs", "azure" or "openai" (any service with OpenAI's /audio/speech API).
-//                   Left out, it is ElevenLabs for a key starting "sk_" and Azure otherwise
-//   VOICE_REGION    Azure region, e.g. "centralindia" (azure only)
-//   VOICE_NAME      which voice (for ElevenLabs, the voice's id); defaults to a male conversational one
-//   VOICE_MODEL     model id (ElevenLabs and openai-style)
-//   VOICE_BASE_URL  override the service address (openai-style services other than OpenAI)
-//   VOICE_DAILY_CHARS  characters spoken per day across all users before falling back (default 15000,
-//                      which keeps a month inside Azure's free allowance)
+// Up to three services can be set, tried in order: when the first runs out of its allowance or
+// fails, the next takes over, and after the last the pages use the browser's voice.
+//
+//   VOICE_API_KEY    key for the first service (turns this on)
+//   VOICE_PROVIDER   "elevenlabs", "deepgram", "azure" or "openai" (any service with OpenAI's
+//                    /audio/speech API). Left out: ElevenLabs for a key starting "sk_", else Azure
+//   VOICE_NAME       which voice (ElevenLabs: the voice's id; Deepgram: the model name)
+//   VOICE_MODEL      model id (ElevenLabs and openai-style)
+//   VOICE_REGION     Azure region, e.g. "centralindia" (azure only)
+//   VOICE_BASE_URL   override the service address
+//   VOICE2_..., VOICE3_...   the same settings for the second and third service
+//   VOICE_DAILY_CHARS  characters spoken per day across all users before falling back (default 60000)
+//   VOICE_CONCURRENCY  requests sent to a service at the same moment (default 2)
 
 const { prisma } = require('./prismaClient');
 const { AppError } = require('./appError');
 const { stripControl } = require('./text');
 
-const API_KEY = process.env.VOICE_API_KEY || '';
-const PROVIDER = (process.env.VOICE_PROVIDER || (API_KEY.startsWith('sk_') ? 'elevenlabs' : 'azure')).toLowerCase();
-const REGION = process.env.VOICE_REGION || 'eastus';
 // Defaults per service: a male, conversational voice, and the quickest model
 const DEFAULTS = {
-  azure: { name: 'en-US-AndrewNeural' },
   // "Chris": a down-to-earth conversational voice, on the model that answers in under half a second.
-  // VOICE_MODEL=eleven_multilingual_v2 is more expressive, slower, and uses twice the credits.
+  // eleven_multilingual_v2 is more expressive, slower, and uses twice the credits.
   elevenlabs: { name: 'iP95p4xoKVk53GoZ742B', model: 'eleven_flash_v2_5' },
+  deepgram: { name: 'aura-2-apollo-en' },
+  azure: { name: 'en-US-AndrewNeural' },
   openai: { name: 'onyx', model: 'gpt-4o-mini-tts' }
 };
-const NAME = process.env.VOICE_NAME || DEFAULTS[PROVIDER]?.name;
-const MODEL = process.env.VOICE_MODEL || DEFAULTS[PROVIDER]?.model;
-const BASE_URL = (process.env.VOICE_BASE_URL || '').replace(/\/+$/, '');
-const DAILY_CHARS = Number(process.env.VOICE_DAILY_CHARS) > 0 ? Number(process.env.VOICE_DAILY_CHARS) : 15000;
 
+function readVoice(prefix) {
+  const apiKey = process.env[`${prefix}_API_KEY`] || '';
+  const provider = (process.env[`${prefix}_PROVIDER`] || (apiKey.startsWith('sk_') ? 'elevenlabs' : 'azure')).toLowerCase();
+  if (!apiKey || !Object.hasOwn(DEFAULTS, provider)) return null;
+  return {
+    provider,
+    apiKey,
+    name: process.env[`${prefix}_NAME`] || DEFAULTS[provider].name,
+    model: process.env[`${prefix}_MODEL`] || DEFAULTS[provider].model,
+    region: process.env[`${prefix}_REGION`] || 'eastus',
+    baseURL: (process.env[`${prefix}_BASE_URL`] || '').replace(/\/+$/, ''),
+    restingUntil: 0 // set when the service says its allowance is used up
+  };
+}
+
+const VOICES = ['VOICE', 'VOICE2', 'VOICE3'].map(readVoice).filter(Boolean);
+const voiceEnabled = VOICES.length > 0;
+
+const DAILY_CHARS = Number(process.env.VOICE_DAILY_CHARS) > 0 ? Number(process.env.VOICE_DAILY_CHARS) : 60000;
 const MAX_SENTENCE_CHARS = 600;       // one spoken sentence; the interviewer's are far shorter
 const MAX_INTERVIEW_CHARS = 12000;    // several times what a full interview says
 const TIMEOUT_MS = 10000;
+// A service that has run out is left alone for this long before it is tried again
+const REST_MS = 30 * 60 * 1000;
 
 // Speech services refuse requests that arrive too many at once (ElevenLabs' free plan allows
 // only a few), and a reply's sentences all arrive together. So they wait their turn here.
@@ -53,8 +72,6 @@ async function inTurn(task) {
   }
 }
 
-const voiceEnabled = !!API_KEY && Object.hasOwn(DEFAULTS, PROVIDER);
-
 // Characters spoken today, kept in memory and seeded from the database after a restart
 let today = '';
 let spokenToday = 0;
@@ -72,46 +89,76 @@ async function spokenSoFarToday() {
 
 const xml = (text) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 
-async function fromAzure(text, signal) {
-  const url = BASE_URL || `https://${REGION}.tts.speech.microsoft.com`;
-  return fetch(`${url}/cognitiveservices/v1`, {
-    method: 'POST',
-    signal,
-    headers: {
-      'Ocp-Apim-Subscription-Key': API_KEY,
-      'Content-Type': 'application/ssml+xml',
-      'X-Microsoft-OutputFormat': 'audio-24khz-48kbitrate-mono-mp3',
-      'User-Agent': 'AeroPrep'
-    },
-    body: `<speak version="1.0" xml:lang="${xml(NAME.slice(0, 5))}"><voice name="${xml(NAME)}">${xml(text)}</voice></speak>`
-  });
-}
+// One request to one service. `previous` is the sentence before, for the services that can use it.
+const SERVICES = {
+  elevenlabs: (voice, text, signal, previous) =>
+    fetch(`${voice.baseURL || 'https://api.elevenlabs.io'}/v1/text-to-speech/${encodeURIComponent(voice.name)}?output_format=mp3_44100_64`, {
+      method: 'POST',
+      signal,
+      headers: { 'xi-api-key': voice.apiKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text,
+        model_id: voice.model,
+        // The sentence before this one, so the voice carries its tone across instead of starting cold
+        ...(previous ? { previous_text: previous } : {}),
+        // Lower stability lets the pitch move the way a person's does
+        voice_settings: { stability: 0.45, similarity_boost: 0.8 }
+      })
+    }),
 
-async function fromElevenLabs(text, signal, previous) {
-  return fetch(`${BASE_URL || 'https://api.elevenlabs.io'}/v1/text-to-speech/${encodeURIComponent(NAME)}?output_format=mp3_44100_64`, {
-    method: 'POST',
-    signal,
-    headers: { 'xi-api-key': API_KEY, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      text,
-      model_id: MODEL,
-      // The sentence before this one, so the voice carries its tone across instead of starting cold
-      ...(previous ? { previous_text: previous } : {}),
-      // Lower stability lets the pitch move the way a person's does
-      voice_settings: { stability: 0.45, similarity_boost: 0.8 }
+  deepgram: (voice, text, signal) =>
+    fetch(`${voice.baseURL || 'https://api.deepgram.com'}/v1/speak?model=${encodeURIComponent(voice.name)}&encoding=mp3`, {
+      method: 'POST',
+      signal,
+      headers: { Authorization: `Token ${voice.apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text })
+    }),
+
+  azure: (voice, text, signal) =>
+    fetch(`${voice.baseURL || `https://${voice.region}.tts.speech.microsoft.com`}/cognitiveservices/v1`, {
+      method: 'POST',
+      signal,
+      headers: {
+        'Ocp-Apim-Subscription-Key': voice.apiKey,
+        'Content-Type': 'application/ssml+xml',
+        'X-Microsoft-OutputFormat': 'audio-24khz-48kbitrate-mono-mp3',
+        'User-Agent': 'AeroPrep'
+      },
+      body: `<speak version="1.0" xml:lang="${xml(voice.name.slice(0, 5))}"><voice name="${xml(voice.name)}">${xml(text)}</voice></speak>`
+    }),
+
+  openai: (voice, text, signal) =>
+    fetch(`${voice.baseURL || 'https://api.openai.com/v1'}/audio/speech`, {
+      method: 'POST',
+      signal,
+      headers: { Authorization: `Bearer ${voice.apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: voice.model, voice: voice.name, input: text, response_format: 'mp3' })
     })
-  });
-}
+};
 
-const SERVICES = { azure: fromAzure, elevenlabs: fromElevenLabs, openai: (text, signal) => fromOpenAIStyle(text, signal) };
-
-async function fromOpenAIStyle(text, signal) {
-  return fetch(`${BASE_URL || 'https://api.openai.com/v1'}/audio/speech`, {
-    method: 'POST',
-    signal,
-    headers: { Authorization: `Bearer ${API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: MODEL, voice: NAME, input: text, response_format: 'mp3' })
-  });
+// Asks one service; resolves to audio, or null when it could not supply any
+async function askService(voice, text, previous) {
+  const ask = () => SERVICES[voice.provider](voice, text, AbortSignal.timeout(TIMEOUT_MS), previous);
+  try {
+    let response = await ask();
+    // "Too many at once": wait a moment and ask once more
+    if (response.status === 429) {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      response = await ask();
+    }
+    if (response.ok) {
+      return { audio: Buffer.from(await response.arrayBuffer()), type: response.headers.get('content-type') || 'audio/mpeg' };
+    }
+    const detail = (await response.text()).slice(0, 200);
+    console.error(`[Voice] ${voice.provider} answered ${response.status}: ${detail}`);
+    // Out of allowance, or the key is not accepted: stop asking it for a while
+    if ([401, 402, 403, 429].includes(response.status) || /quota|credit|limit/i.test(detail)) {
+      voice.restingUntil = Date.now() + REST_MS;
+    }
+  } catch (error) {
+    console.error(`[Voice] ${voice.provider} could not be reached: ${error.message}`);
+  }
+  return null;
 }
 
 /**
@@ -135,26 +182,22 @@ async function speak(interviewId, userId, rawText, rawPrevious) {
   spokenToday += text.length;
   await prisma.interview.update({ where: { id: interview.id }, data: { voiceChars: { increment: text.length } } });
 
-  let response;
-  try {
-    response = await inTurn(async () => {
-      let answer = await SERVICES[PROVIDER](text, AbortSignal.timeout(TIMEOUT_MS), previous);
-      // "Too many at once" from the service: wait a moment and ask once more
-      if (answer.status === 429) {
-        await new Promise((resolve) => setTimeout(resolve, 700));
-        answer = await SERVICES[PROVIDER](text, AbortSignal.timeout(TIMEOUT_MS), previous);
-      }
-      return answer;
-    });
-  } catch (error) {
-    console.error(`[Voice] ${PROVIDER} could not be reached: ${error.message}`);
-    throw new AppError(502, 'VOICE_UNAVAILABLE', 'The natural voice is not available right now.');
-  }
-  if (!response.ok) {
-    console.error(`[Voice] ${PROVIDER} answered ${response.status}: ${(await response.text()).slice(0, 200)}`);
-    throw new AppError(502, 'VOICE_UNAVAILABLE', 'The natural voice is not available right now.');
-  }
-  return { audio: Buffer.from(await response.arrayBuffer()), type: response.headers.get('content-type') || 'audio/mpeg' };
+  const spoken = await inTurn(async () => {
+    for (const voice of VOICES) {
+      if (voice.restingUntil > Date.now()) continue;
+      const result = await askService(voice, text, previous);
+      if (result) return result;
+    }
+    return null;
+  });
+  if (!spoken) throw new AppError(502, 'VOICE_UNAVAILABLE', 'The natural voice is not available right now.');
+  return spoken;
 }
 
-module.exports = { voiceEnabled, speak, describeVoice: () => (voiceEnabled ? `${PROVIDER}/${NAME}` : 'browser voice (set VOICE_API_KEY for a natural one)') };
+function describeVoice() {
+  return voiceEnabled
+    ? VOICES.map((voice) => `${voice.provider}/${voice.name}`).join(', then ')
+    : 'browser voice (set VOICE_API_KEY for a natural one)';
+}
+
+module.exports = { voiceEnabled, speak, describeVoice };

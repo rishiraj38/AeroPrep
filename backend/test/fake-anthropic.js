@@ -55,11 +55,13 @@ function createFakeAnthropic({ delayMs = 0, pieceDelayMs = 0 } = {}) {
   const server = http.createServer((req, res) => {
     if (req.method === 'GET') { res.end(String(state.count)); return; }
     // Also stands in for a speech service: any request for speech gets a third of a second of silence
-    if (req.url.includes('/cognitiveservices/') || req.url.includes('/audio/speech') || req.url.includes('/text-to-speech/')) {
-      state.voiceRequests.push({ url: req.url, key: req.headers['xi-api-key'] });
+    if (req.url.includes('/cognitiveservices/') || req.url.includes('/audio/speech') || req.url.includes('/text-to-speech/') || req.url.includes('/v1/speak')) {
+      state.voiceRequests.push({ url: req.url, key: req.headers['xi-api-key'] || req.headers.authorization });
       state.voiceNow++; state.voiceMostAtOnce = Math.max(state.voiceMostAtOnce, state.voiceNow);
       let ssml = ''; req.on('data', (c) => ssml += c); req.on('end', () => {
         state.spoken.push(ssml);
+        // ElevenLabs alone saying its credits are used up
+        if (ssml.includes('ELEVEN_OUT_PLEASE') && req.url.includes('/text-to-speech/')) { state.voiceNow--; res.statusCode = 401; return res.end('{"detail":{"status":"quota_exceeded"}}'); }
         if (ssml.includes('VOICE_FAIL_PLEASE')) { state.voiceNow--; res.statusCode = 500; return res.end('no voice today'); }
         const samples = 8000; const wav = Buffer.alloc(44 + samples * 2);
         wav.write('RIFF', 0); wav.writeUInt32LE(36 + samples * 2, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
