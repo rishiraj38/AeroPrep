@@ -50,6 +50,17 @@ function splitSentences(text: string): string[] {
   return parts.filter(Boolean);
 }
 
+// Browser voices read every sentence at the same speed and pitch, which is what makes them
+// sound mechanical. Speaking a little slower than the default, lifting questions slightly and
+// letting statements drift a little gives the ear some of the variation a person has.
+const STATEMENT_PITCHES = [1.0, 0.95, 1.03, 0.97];
+function delivery(text: string, position: number): { rate: number; pitch: number } {
+  const words = text.trim().split(/\s+/).length;
+  if (/\?["')]*$/.test(text.trim())) return { rate: 0.9, pitch: 1.07 };   // a question: slower, rising
+  if (words <= 3) return { rate: 0.85, pitch: 0.96 };                     // "Got it." is said, not rushed
+  return { rate: 0.93, pitch: STATEMENT_PITCHES[position % STATEMENT_PITCHES.length] };
+}
+
 function pickVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null {
   const english = voices.filter(v => v.lang.replace('_', '-').startsWith('en'));
   for (const preference of VOICE_PREFERENCES) {
@@ -275,6 +286,9 @@ export default function InterviewSessionPage() {
       utt.voice = voice;
       utt.lang = voice.lang;
     }
+    const { rate, pitch } = delivery(text, turn.utterances.length);
+    utt.rate = rate;
+    utt.pitch = pitch;
 
     let settled = false;
     const settle = () => {
@@ -291,7 +305,7 @@ export default function InterviewSessionPage() {
     utt.onstart = () => {
       started = true;
       // Browsers occasionally stall mid-speech and never report the end
-      setTimeout(() => { if (!settled && turnRef.current === turn) silenceTurn(turn); }, 4000 + text.length * 120);
+      setTimeout(() => { if (!settled && turnRef.current === turn) silenceTurn(turn); }, 4000 + text.length * 150);
     };
     utt.onend   = settle;
     utt.onerror = settle;
