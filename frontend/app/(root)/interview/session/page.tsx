@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { getToken } from '@/lib/auth';
 import { skipCoding, endInterview, expireSession } from '@/lib/api';
-import { NeuralVoice, NeuralVoiceState, neuralVoiceChosen } from '@/lib/neuralVoice';
+import { ServerVoice } from '@/lib/serverVoice';
 import { getCurrentInterviewId, clearCurrentInterview } from '@/lib/currentInterview';
 import { useAttentionMonitor } from '@/lib/useAttentionMonitor';
 import { io, Socket } from 'socket.io-client';
@@ -103,6 +103,7 @@ interface SessionState {
   answersUsed: number;
   maxAnswers: number;
   maxAnswerChars: number;
+  naturalVoice?: boolean;   // the API can supply the interviewer's voice
   hasFeedback: boolean;
 }
 
@@ -159,10 +160,9 @@ export default function InterviewSessionPage() {
   const firstInputRef = useRef(0);
   const lastInputRef  = useRef(0);
   const ackRef        = useRef<SpeechSynthesisUtterance | null>(null);
-  // The optional natural voice (downloaded once, generated in this browser)
-  const neuralRef     = useRef<NeuralVoice | null>(null);
-  const [neuralState, setNeuralState] = useState<NeuralVoiceState>('off');
-  const [neuralPercent, setNeuralPercent] = useState(0);
+  const sayInTurnRef  = useRef<(text: string) => void>(() => {});
+  // The natural voice supplied by the API, when it has a speech service; otherwise the browser's
+  const neuralRef     = useRef<ServerVoice | null>(null);
   const cameraPendingRef = useRef(false);                  // a camera request is waiting on the browser
   const [endError, setEndError] = useState('');            // the server could not be told the interview is over
   const [micPausedToType, setMicPausedToType] = useState(false);
@@ -293,7 +293,7 @@ export default function InterviewSessionPage() {
     stopListening();
     synthRef.current?.cancel();
     neuralRef.current?.cancel();
-    turnRef.current = { utterances: [], pending: 0, closed: false, silenced: !synthRef.current && neuralRef.current?.state !== 'ready', onDone };
+    turnRef.current = { utterances: [], pending: 0, closed: false, silenced: !synthRef.current && !neuralRef.current?.available, onDone };
     speakingRef.current = true;
     setIsAiSpeaking(true);
   }, [stopListening]);
@@ -304,13 +304,15 @@ export default function InterviewSessionPage() {
     const synth = synthRef.current;
     if (!turn || turn.silenced || !text.trim()) return;
 
-    // The natural voice, when it is loaded: it queues and plays sentences in order itself
+    // The natural voice, when the API supplies one: it queues and plays sentences in order itself.
+    // A sentence it could not deliver is said by the built-in voice instead.
     const neural = neuralRef.current;
-    if (neural?.state === 'ready') {
+    if (neural?.available) {
       turn.pending++;
-      neural.speak(text).then(() => {
+      neural.speak(text).then((heard) => {
         if (turnRef.current !== turn || turn.silenced) return;
         turn.pending--;
+        if (!heard && !neural.available) sayInTurnRef.current(text);
         finishTurnIfDone();
       });
       return;
@@ -355,6 +357,8 @@ export default function InterviewSessionPage() {
       setTimeout(() => { if (!started && !settled && turnRef.current === turn) silenceTurn(turn); }, 3000);
     }
   }, [finishTurnIfDone, silenceTurn]);
+
+  useEffect(() => { sayInTurnRef.current = sayInTurn; }, [sayInTurn]);
 
   // No more text is coming for the current turn
   const closeTurn = useCallback(() => {
@@ -531,7 +535,7 @@ export default function InterviewSessionPage() {
 
     // A short spoken acknowledgement straight away; the reply's first sentence follows it
     const synth = synthRef.current;
-    if (neuralRef.current?.state === 'ready') {
+    if (neuralRef.current?.available) {
       neuralRef.current.cancel();
       neuralRef.current.speak(acknowledgementFor(ans, answersUsedRef.current));
     } else if (synth) {
@@ -675,13 +679,9 @@ export default function InterviewSessionPage() {
     };
   }, [setAnswer]);
 
-  // The natural voice: created once, and loaded straight away if it was chosen on an earlier visit
-  // (it then comes from the browser's cache, not the network)
   useEffect(() => {
-    const voice = new NeuralVoice((state, percent) => { setNeuralState(state); setNeuralPercent(percent); });
+    const voice = new ServerVoice();
     neuralRef.current = voice;
-    setNeuralState(voice.state);
-    if (voice.state === 'off' && neuralVoiceChosen()) voice.enable(ACKNOWLEDGEMENTS.concat('Sure.'));
     return () => { voice.destroy(); neuralRef.current = null; };
   }, []);
 
@@ -769,7 +769,10 @@ export default function InterviewSessionPage() {
   // Enter the room. Runs from a click, which is what lets the browser speak and listen.
   const enterCall = () => {
     const latest = transcript[transcript.length - 1];
-    neuralRef.current?.resume();
+    // Joining is a click, which is when a browser allows audio to start
+    if (session?.naturalVoice && interviewIdRef.current) {
+      neuralRef.current?.start(interviewIdRef.current, ACKNOWLEDGEMENTS.concat('Sure.'));
+    }
     goToPhase('active');
     lastActivityRef.current = Date.now();
 
@@ -967,31 +970,6 @@ export default function InterviewSessionPage() {
             <li><strong className="text-white">Length.</strong> Up to {Math.round(totalSecs / 60)} minutes and {session.maxAnswers} answers. The clock starts with your first answer.</li>
             <li><strong className="text-white">Ending.</strong> The red button ends the interview for good.</li>
           </ul>
-
-          {/* Offered only where it can run well; everyone else keeps the built-in voice */}
-          {neuralState !== 'unsupported' && (
-            <div className="mb-5 rounded-lg border border-white/10 bg-white/5 p-3 text-sm text-gray-300">
-              {neuralState === 'ready' ? (
-                <p className="flex items-center justify-between gap-3">
-                  <span><strong className="text-white">Natural voice is on.</strong> Alex will sound like a person.</span>
-                  <button type="button" onClick={() => neuralRef.current?.disable()} className="shrink-0 underline underline-offset-4 hover:text-white cursor-pointer">Turn off</button>
-                </p>
-              ) : neuralState === 'loading' ? (
-                <p role="status"><strong className="text-white">Getting the natural voice ready{neuralPercent > 0 && neuralPercent < 100 ? `: ${neuralPercent}%` : '…'}</strong> You can join now; Alex switches to it when it is ready.</p>
-              ) : (
-                <p className="flex items-center justify-between gap-3">
-                  <span>
-                    <strong className="text-white">Want Alex to sound like a person?</strong>{' '}
-                    {neuralState === 'failed' ? 'The natural voice could not start on this device.' : 'The natural voice is a one-time download of about 330 MB and runs in your browser.'}
-                  </span>
-                  <button type="button" onClick={() => neuralRef.current?.enable(ACKNOWLEDGEMENTS.concat('Sure.'))}
-                    className="shrink-0 rounded-md bg-white/10 px-3 py-1.5 font-medium text-white hover:bg-white/20 cursor-pointer">
-                    {neuralState === 'failed' ? 'Try again' : 'Use natural voice'}
-                  </button>
-                </p>
-              )}
-            </div>
-          )}
 
           {resuming && secsLeft !== null && (
             <p className={`font-mono text-sm mb-4 text-center ${isWarning ? 'text-red-400' : 'text-gray-300'}`}>
